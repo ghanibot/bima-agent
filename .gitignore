@@ -1,0 +1,30 @@
+# ── Dependencies ──────────────────────────────────────────────
+node_modules/
+
+# ── Runtime data (NEVER commit — contains API keys, WA session, personal files) ──
+data/
+
+# ── Local Claude Code settings ────────────────────────────────
+.claude/
+
+# ── Personal / private content ────────────────────────────────
+issue/
+docs/superpowers/
+
+# ── OS / Editor ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.env
+.env.*
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Compressed memory backups ─────────────────────────────────
+*.original.md
+
+# ── Temp TTS audio ────────────────────────────────────────────
+/tmp/bima_tts_*

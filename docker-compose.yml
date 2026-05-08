@@ -1,0 +1,10 @@
+services:
+  bima:
+    build: .
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./bima-data:/data
+    environment:
+      - BIMA_DATA=/data
+    restart: unless-stopped
