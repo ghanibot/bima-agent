@@ -88,6 +88,7 @@ function cmdHelp() {
     ['/ltm',       'Lihat / hapus memori jangka panjang'],
     ['/search',    'Cari di web langsung dari terminal'],
     ['/polymarket','Cari pasar prediksi di Polymarket'],
+    ['/tg',        'Kelola Telegram bot (token/start/stop/status)'],
     ['/tenant',    'Kelola tenant (list/add/switch/del/groups)'],
     ['/skill',     'Kelola plugin/skill (list/add/remove/info)'],
     ['/watch',     'Monitor topik, kirim notif ke grup kalau berubah'],
@@ -818,6 +819,65 @@ async function cmdSearch(query) {
 }
 
 // ══════════════════════════════════════════════════════════════
+//  /tg — Telegram bot management
+// ══════════════════════════════════════════════════════════════
+async function cmdTelegram(args) {
+  const { getTelegramStatus, startTelegram, stopTelegram } = require('./telegram');
+  const sub = args[0];
+
+  if (!sub || sub === 'status') {
+    const st  = getTelegramStatus();
+    const cfg = getConfig(_currentTenant);
+    let out   = 'TELEGRAM — Status Bot\n' + '─'.repeat(40) + '\n';
+    out += st.connected
+      ? `  ● Terhubung  @${st.username} (${st.name})\n`
+      : `  ○ Belum terhubung\n`;
+    if (cfg.telegramToken) out += `  Token: ***${cfg.telegramToken.slice(-8)}\n`;
+    else out += `  Token: belum diset\n`;
+    out += '\nSubcommand: status | token <BOT_TOKEN> | start | stop\n';
+    out += 'Dapatkan token dari @BotFather di Telegram.\n';
+    out += '─'.repeat(40);
+    println(out);
+    return;
+  }
+
+  if (sub === 'token') {
+    const token = args[1];
+    if (!token) { println('Contoh: /tg token 123456789:ABCdefGHI...'); return; }
+    saveConfig({ telegramToken: token }, _currentTenant);
+    println('✓ Token Telegram disimpan.\nGunakan /tg start untuk mengaktifkan bot.');
+    return;
+  }
+
+  if (sub === 'start') {
+    const cfg = getConfig(_currentTenant);
+    if (!cfg.telegramToken) {
+      println('! Token belum diset.\nContoh: /tg token 123456789:ABCdefGHI...\nDapatkan token dari @BotFather di Telegram.');
+      return;
+    }
+    println('⏳ Menghubungkan bot Telegram...');
+    try {
+      await startTelegram(cfg.telegramToken, log);
+      const st = getTelegramStatus();
+      println(`✓ Bot aktif!\n  Username: @${st.username}\n  Nama    : ${st.name}`);
+      ui.updateStatus({ provider: getConfig(_currentTenant).provider, model: getConfig(_currentTenant).model, waConnected: getWAStatus().connected, tenant: _currentTenant, tgConnected: true, tgUsername: st.username });
+    } catch (e) {
+      println(`✗ Gagal start Telegram: ${e.message}`);
+    }
+    return;
+  }
+
+  if (sub === 'stop') {
+    await stopTelegram();
+    println('✓ Bot Telegram dihentikan.');
+    ui.updateStatus({ provider: getConfig(_currentTenant).provider, model: getConfig(_currentTenant).model, waConnected: getWAStatus().connected, tenant: _currentTenant, tgConnected: false });
+    return;
+  }
+
+  println('Subcommand: status | token <BOT_TOKEN> | start | stop');
+}
+
+// ══════════════════════════════════════════════════════════════
 //  /polymarket
 // ══════════════════════════════════════════════════════════════
 async function cmdPolymarket(query) {
@@ -967,6 +1027,23 @@ async function main() {
     ui.log('WA', 'Session tidak ada. Ketik /wa untuk mulai.');
   }
 
+  // Auto-start Telegram if token configured
+  const tgToken = getConfig(_currentTenant).telegramToken;
+  if (tgToken) {
+    setTimeout(async () => {
+      try {
+        const { startTelegram, getTelegramStatus } = require('./telegram');
+        await startTelegram(tgToken, log);
+        const st = getTelegramStatus();
+        ui.updateStatus({ provider: cfg.provider, model: cfg.model, waConnected: false, tenant: _currentTenant, tgConnected: true, tgUsername: st.username });
+      } catch (e) {
+        ui.log('TG', `Auto-start gagal: ${e.message}`);
+      }
+    }, 2000);
+  } else {
+    ui.log('TG', 'Token belum diset. Gunakan /tg token <TOKEN> lalu /tg start.');
+  }
+
   // Set up input handler
   ui.onInput(async (line) => {
     // Echo user input to chat panel
@@ -1000,6 +1077,10 @@ async function main() {
       else if (line.startsWith('/ltm del ')){ cmdLTMDelete(line.slice(9).trim()); }
       else if (line.startsWith('/search ')) { await cmdSearch(line.slice(8).trim()); }
       else if (line === '/polymarket' || line.startsWith('/polymarket ')) { await cmdPolymarket(line.slice(12).trim()); }
+      else if (line === '/tg' || line.startsWith('/tg ')) {
+        const parts = line.slice(3).trim().split(/\s+/).filter(Boolean);
+        await cmdTelegram(parts);
+      }
       else if (line === '/tenant' || line.startsWith('/tenant ')) {
         const parts = line.slice(7).trim().split(/\s+/).filter(Boolean);
         await cmdTenant(parts);

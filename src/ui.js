@@ -28,6 +28,7 @@ const LOG_PREFIX = {
   ERROR: C.red('[ERR ]'),
   WARN:  C.yellow('[WARN]'),
   WA:    C.green('[WA  ]'),
+  TG:    C.cyan('[TG  ]'),
   AGENT: C.cyan('[AGNT]'),
   DEBUG: C.gray('[DEBG]'),
   STT:   C.yellow('[STT ]'),
@@ -210,15 +211,15 @@ function log(type, msg) {
 }
 
 // ── updateStatus ──────────────────────────────────────────────
-function updateStatus({ provider, model, waConnected, tenant } = {}) {
-  // Print a one-line status update into the log stream
-  const wa  = waConnected ? C.green('● Online') : C.red('● Offline');
-  const ten = tenant   || 'default';
+function updateStatus({ provider, model, waConnected, tenant, tgConnected, tgUsername } = {}) {
+  const wa  = waConnected  ? C.green('WA:●') : C.red('WA:○');
+  const tg  = tgConnected  ? C.cyan(`TG:@${tgUsername || '●'}`) : C.gray('TG:○');
+  const ten = tenant || 'default';
   const ai  = `${provider || '--'}/${model || '--'}`;
   _clearCurrentLine();
   process.stdout.write(
     C.gray('[STATUS] ') +
-    C.dim(`tenant:${ten}  ai:${ai}  wa:`) + wa + '\n'
+    C.dim(`tenant:${ten}  ai:${ai}  `) + wa + C.dim('  ') + tg + '\n'
   );
   if (_rl && !_pickerActive) _rl.prompt(true);
 }
@@ -403,6 +404,7 @@ const COMMANDS = [
   { cmd: '/ltm',       desc: 'Lihat / hapus memori jangka panjang' },
   { cmd: '/search',    desc: 'Cari di web dari terminal' },
   { cmd: '/polymarket', desc: 'Cari pasar prediksi Polymarket' },
+  { cmd: '/tg',        desc: 'Kelola Telegram bot (token/start/stop)' },
   { cmd: '/tenant',    desc: 'Kelola tenant (list/add/switch/del)' },
   { cmd: '/skill',     desc: 'Kelola plugin/skill (list/add/info)' },
   { cmd: '/logout',    desc: 'Logout WhatsApp & hapus session' },

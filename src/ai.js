@@ -58,7 +58,10 @@ function buildReq(cfg, messages, system) {
   if (provider === 'gemini') {
     const geminiMessages = messages.map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }],
+      // Array content = already-formatted parts (e.g. image blocks from buildImageContent)
+      parts: Array.isArray(m.content)
+        ? m.content
+        : [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }],
     }));
     return {
       url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,

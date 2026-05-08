@@ -36,6 +36,8 @@
 - 📊 **Prediction markets** — search Polymarket for real-time event probabilities via `/polymarket`
 - 👁️ **Topic watcher** — `/watch` monitors topics and sends alerts to a group when content changes
 - 👤 **Member profiles** — tracks interaction history of WhatsApp group members via `/profiles`
+- 👁‍🗨 **Vision AI** — send a photo to WhatsApp or Telegram and BIMA analyzes it (works with all vision-capable providers: GPT-4o, Claude, Gemini)
+- 💬 **Telegram support** — run BIMA on Telegram alongside WhatsApp; same agent, same KB, same memory
 
 ---
 
@@ -89,6 +91,31 @@ docker run -it --rm \
 
 ---
 
+## Telegram
+
+Run BIMA on Telegram alongside (or instead of) WhatsApp — same AI, same knowledge base, same long-term memory.
+
+**Setup in 2 steps:**
+
+```bash
+# 1. Get a bot token from @BotFather on Telegram
+#    → /newbot → choose a name → copy the token
+
+# 2. In BIMA terminal:
+/tg token 123456789:ABCdefGHI...   # save token
+/tg start                           # activate bot
+```
+
+Once active, your bot accepts:
+- **Text** — routed through the full agent loop (web search, KB, LTM, tools)
+- **Photos** — analyzed by vision AI (GPT-4o / Claude / Gemini)
+- **Voice notes** — transcribed via STT then answered
+- **Files** (PDF/Excel/Word) — added to the shared knowledge base
+
+The bot auto-starts on every BIMA launch when a token is saved. Status shows in the terminal status bar as `TG:@botname`.
+
+---
+
 ## Commands
 
 | Command | Description |
@@ -108,6 +135,7 @@ docker run -it --rm \
 | `/ltm` | View / delete long-term memory entries |
 | `/search <query>` | Search the web from the terminal |
 | `/polymarket [query]` | Search Polymarket prediction markets (omit query for trending) |
+| `/tg` | Manage Telegram bot (token / start / stop / status) |
 | `/watch` | Monitor a topic and alert a group when it changes |
 | `/profiles` | View interaction profiles of WhatsApp group members |
 | `/tenant` | Manage tenants (list / add / switch / del / groups) |
