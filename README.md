@@ -19,7 +19,8 @@
 
 ## Features
 
-- 🤖 **AI-powered replies** — supports OpenAI, Anthropic, and OpenRouter (100+ models via a single API key)
+- 🤖 **AI-powered replies** — 11 provider support: OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek, Together AI, OpenRouter, Ollama, LM Studio, and any OpenAI-compatible endpoint
+- 🖥️ **Interactive TUI** — arrow-key menus, number hotkeys, ESC cancel throughout all setup flows (`/model`, `/wa`, `/input`, `/output`, `/stt`, first-run wizard)
 - 👥 **Multi-tenant** — manage multiple WhatsApp accounts or personas from one installation
 - 🧩 **Plugin system** — drop a `.js` file into `~/.bima/plugins/` to add new CLI commands and agent tools
 - 📚 **Knowledge base** — index PDFs, Word docs, and spreadsheets; the agent retrieves context automatically
@@ -32,7 +33,9 @@
 - 💸 **Realtime prices** — crypto (CoinGecko) and stocks (Yahoo Finance) via `get_price`
 - 🔬 **Deep research** — multi-source web research with AI-generated sub-queries
 - 🔊 **Voice notes (TTS)** — reply any message with `/voice` to receive it as a voice note
-- 📊 **Prediction markets** — Polymarket plugin for real-time event probabilities
+- 📊 **Prediction markets** — search Polymarket for real-time event probabilities via `/polymarket`
+- 👁️ **Topic watcher** — `/watch` monitors topics and sends alerts to a group when content changes
+- 👤 **Member profiles** — tracks interaction history of WhatsApp group members via `/profiles`
 
 ---
 
@@ -93,7 +96,7 @@ docker run -it --rm \
 | `/help` | Show this command list |
 | `/wa` | Connect WhatsApp (scan QR code) |
 | `/status` | Show connection & configuration status |
-| `/model` | Set AI provider, model, and API key |
+| `/model` | Set AI provider, model, and API key (interactive menu) |
 | `/input` | Select WhatsApp group(s) as agent input |
 | `/output` | Select WhatsApp group as agent output |
 | `/knowledge` | List indexed documents |
@@ -103,12 +106,17 @@ docker run -it --rm \
 | `/reminder` | View active reminders |
 | `/memory` | Reset conversation memory for all users |
 | `/ltm` | View / delete long-term memory entries |
-| `/search` | Search the web from the terminal |
+| `/search <query>` | Search the web from the terminal |
+| `/polymarket [query]` | Search Polymarket prediction markets (omit query for trending) |
+| `/watch` | Monitor a topic and alert a group when it changes |
+| `/profiles` | View interaction profiles of WhatsApp group members |
 | `/tenant` | Manage tenants (list / add / switch / del / groups) |
 | `/skill` | Manage plugins (list / add / info) |
 | `/logout` | Log out of WhatsApp and delete session |
 | `/clear` | Clear the screen |
 | `/exit` | Exit BIMA |
+
+All menus use arrow-key navigation with number hotkeys (1–9) and ESC to cancel.
 
 You can also type any question directly — BIMA will answer using the configured AI model and your knowledge base.
 
@@ -174,13 +182,23 @@ The `ctx` object passed to commands exposes:
 
 ## AI Providers
 
-| Provider | Example models |
-|---|---|
-| **OpenAI** | `gpt-4o-mini`, `gpt-4o` |
-| **Anthropic** | `claude-3-haiku-20240307`, `claude-3-5-sonnet-20241022` |
-| **OpenRouter** | `meta-llama/llama-3-8b-instruct`, `google/gemini-flash-1.5`, and 100+ more |
+BIMA supports 11 providers — switch anytime with `/model`, no restart required.
 
-Run `/model` inside BIMA to switch provider at any time. The new model takes effect immediately — no restart required.
+| Provider | Example models | API key required |
+|---|---|---|
+| **OpenRouter** | `meta-llama/llama-3.1-8b-instruct:free`, `google/gemini-flash-1.5`, 100+ more | Yes — [openrouter.ai/keys](https://openrouter.ai/keys) |
+| **OpenAI** | `gpt-4o-mini`, `gpt-4o` | Yes — [platform.openai.com](https://platform.openai.com/api-keys) |
+| **Anthropic** | `claude-3-haiku-20240307`, `claude-3-5-sonnet-20241022` | Yes — [console.anthropic.com](https://console.anthropic.com/keys) |
+| **Google Gemini** | `gemini-1.5-flash`, `gemini-1.5-pro` | Yes — [aistudio.google.com](https://aistudio.google.com/app/apikey) |
+| **Groq** | `llama-3.1-8b-instant`, `mixtral-8x7b-32768` | Yes — [console.groq.com](https://console.groq.com/keys) |
+| **Mistral AI** | `mistral-small-latest`, `mixtral-8x7b` | Yes — [console.mistral.ai](https://console.mistral.ai/api-keys) |
+| **DeepSeek** | `deepseek-chat`, `deepseek-coder` | Yes — [platform.deepseek.com](https://platform.deepseek.com/api_keys) |
+| **Together AI** | `meta-llama/Llama-3-8b-chat-hf` | Yes — [api.together.xyz](https://api.together.xyz/settings/api-keys) |
+| **Ollama** (local) | `llama3`, `mistral`, any Ollama model | No — needs Ollama running locally |
+| **LM Studio** (local) | any loaded model | No — needs LM Studio server running |
+| **OpenAI-compatible** | any model | Optional — custom endpoint (vLLM, llama.cpp, etc.) |
+
+> **Free options:** OpenRouter has many free-tier models. Groq is free with rate limits. Ollama and LM Studio run entirely on your machine — no API key, no cost, full privacy.
 
 ---
 
