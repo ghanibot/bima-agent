@@ -35,7 +35,8 @@ TOOLS TERSEDIA:
 11. update_kb(hash,field,val) - Update field di dokumen KB
 12. get_group_log(hours)      - Ambil log percakapan grup N jam terakhir
 13. get_person_location(name) - Cari lokasi terakhir seseorang dari log grup
-14. final_answer(text)        - Kirim jawaban akhir ke user
+14. get_polymarket(query)     - Cari pasar prediksi di Polymarket (trending/topik tertentu)
+15. final_answer(text)        - Kirim jawaban akhir ke user
 
 FORMAT RESPONS - balas HANYA JSON valid, tidak ada teks lain:
 {"thought":"pikirku singkat","action":"nama_tool","input":"parameter"}
@@ -54,12 +55,13 @@ ATURAN TOOL:
 - Topik kompleks/analitis → deep_research
 - User kirim link → browse_url
 - Data internal → search_kb
+- Prediksi pasar / probabilitas event → get_polymarket
 - Percakapan biasa/math → langsung final_answer (tidak perlu search)
 `;
 }
 
 // Search-type tools — trigger "sedang mencari" indicator
-const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location']);
+const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket']);
 
 // ── Main agent loop ───────────────────────────────────────────
 // onToolCall(action, input) — optional async callback before each tool executes
@@ -313,6 +315,12 @@ async function executeTool(action, input, tools, tenantId) {
       const t   = new Date(loc.ts).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
       const maps = `https://maps.google.com/?q=${loc.lat},${loc.lng}`;
       return `Lokasi terakhir ${loc.senderName} (${t}):\nKoordinat: ${loc.lat}, ${loc.lng}\nMaps: ${maps}${loc.locationName ? '\nNama lokasi: ' + loc.locationName : ''}`;
+    }
+
+    case 'get_polymarket': {
+      const { searchMarkets, getTrendingMarkets } = require('./polymarket');
+      const q = String(input || '').trim();
+      return q ? await searchMarkets(q) : await getTrendingMarkets();
     }
 
     default:

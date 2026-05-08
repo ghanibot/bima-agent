@@ -4,6 +4,7 @@ const { getConfig, saveConfig } = require('./config');
 const { testAI, PROVIDER_NAMES, NO_KEY_PROVIDERS } = require('./ai');
 const { LANGUAGES } = require('./languages');
 const { addTenant } = require('./tenant');
+const ui = require('./ui');
 
 // Returns true if setup is complete
 function isSetupDone() {
@@ -36,17 +37,14 @@ async function runWizard(ask, println) {
   );
 
   // ── Step 1: Provider ─────────────────────────────────────────
-  println('LANGKAH 1/4 — Pilih AI Provider (Enter untuk skip, pakai nanti)\n');
-  PROVIDERS.forEach((p, i) => {
-    println(`  ${String(i + 1).padStart(2)}. ${p.label.padEnd(20)} ${p.hint}`);
-  });
-  println('');
+  println('LANGKAH 1/4 — Pilih AI Provider\n');
 
-  const provChoice = (await ask('  Pilih provider (1-11, Enter=skip): ')).trim();
+  const provItems = PROVIDERS.map(p => ({ label: p.label, desc: p.hint }));
+  const provIdx = await ui.selectMenu('Pilih AI Provider (Esc=skip)', provItems, { canSkip: true });
   let provConfig = null;
 
-  if (provChoice && !isNaN(provChoice)) {
-    const prov = PROVIDERS[parseInt(provChoice) - 1];
+  if (provIdx !== null) {
+    const prov = PROVIDERS[provIdx];
     if (prov) {
       println(`\n  ✓ Provider: ${prov.label}`);
 
@@ -97,20 +95,9 @@ async function runWizard(ask, println) {
   // ── Step 2: Language ─────────────────────────────────────────
   println('\nLANGKAH 2/4 — Pilih Bahasa Respons\n');
 
-  // Show languages in 3 columns
-  const colW = 25;
-  for (let i = 0; i < LANGUAGES.length; i += 3) {
-    const a = LANGUAGES[i];
-    const b = LANGUAGES[i + 1];
-    const c = LANGUAGES[i + 2];
-    const fmtLang = (l, idx) => l ? `${String(idx + 1).padStart(3)}. ${l.native.slice(0, 14).padEnd(14)}` : '';
-    println(`  ${fmtLang(a, i)}  ${fmtLang(b, i + 1)}  ${fmtLang(c, i + 2)}`);
-  }
-  println('');
-
-  const langChoice = (await ask('  Pilih bahasa (1-50, Enter=1 Indonesia): ')).trim();
-  const langIdx  = langChoice ? (parseInt(langChoice) - 1) : 0;
-  const lang     = LANGUAGES[Math.max(0, Math.min(49, langIdx || 0))];
+  const langItems = LANGUAGES.map(l => ({ label: l.native, desc: l.name }));
+  const langIdxPicked = await ui.selectMenu('Pilih Bahasa Respons', langItems, { canSkip: false });
+  const lang = LANGUAGES[langIdxPicked ?? 0];
   println(`  ✓ Bahasa: ${lang.native} (${lang.name})\n`);
 
   // ── Step 3: Tenant name ──────────────────────────────────────

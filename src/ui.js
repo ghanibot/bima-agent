@@ -38,6 +38,8 @@ let _rl           = null;
 let _inputHandler = null;
 let _promptText   = C.green('Bima') + C.gray(' › ') + ' ';
 let _pickerActive = false;
+let _cmdRunning   = false;  // true while an input handler is awaited
+let _logQueue     = [];     // buffered logs while picker/ask is active
 
 // ── init ──────────────────────────────────────────────────────
 function init() {
@@ -69,11 +71,19 @@ function init() {
 
   _rl.prompt();
 
-  _rl.on('line', (line) => {
-    if (_pickerActive) return;
+  _rl.on('line', async (line) => {
+    if (_pickerActive || _cmdRunning) return;
     const val = line.trim();
     if (!val) { _rl.prompt(); return; }
-    if (_inputHandler) _inputHandler(val);
+    if (_inputHandler) {
+      _cmdRunning = true;
+      try {
+        await _inputHandler(val);
+      } finally {
+        _cmdRunning = false;
+        if (!_pickerActive) _rl.prompt(true);
+      }
+    }
   });
 
   // Intercept @ and / keypresses before readline sees full line
@@ -120,6 +130,21 @@ function init() {
     }
   });
 
+  _rl.on('SIGINT', () => {
+    process.stdout.write('\n');
+    if (_pickerActive || _cmdRunning) {
+      // Force-reset stuck state so user can type again
+      _pickerActive = false;
+      _cmdRunning   = false;
+      try { if (process.stdin.isTTY) process.stdin.setRawMode(true); } catch {}
+      process.stdout.write(C.yellow('  ⚠ Operasi dibatalkan (Ctrl+C)\n'));
+      _flushLogs();
+    } else {
+      process.stdout.write(C.gray('  Ctrl+C · ketik /exit untuk keluar\n'));
+    }
+    _rl.prompt(true);
+  });
+
   _rl.on('close', () => process.exit(0));
 }
 
@@ -161,12 +186,27 @@ function appendChat(role, text) {
 }
 
 // ── log ───────────────────────────────────────────────────────
-function log(type, msg) {
+function _printLog(type, msg) {
   _clearCurrentLine();
   const t     = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const label = LOG_PREFIX[type] || C.gray(`[${type.slice(0,4).padEnd(4)}]`);
   process.stdout.write(C.gray(t) + ' ' + label + ' ' + C.gray(msg) + '\n');
   if (_rl && !_pickerActive) _rl.prompt(true);
+}
+
+function _flushLogs() {
+  while (_logQueue.length) {
+    const { type, msg } = _logQueue.shift();
+    _printLog(type, msg);
+  }
+}
+
+function log(type, msg) {
+  if (_pickerActive) {
+    _logQueue.push({ type, msg });
+    return;
+  }
+  _printLog(type, msg);
 }
 
 // ── updateStatus ──────────────────────────────────────────────
@@ -193,14 +233,34 @@ function ask(question) {
   return new Promise(resolve => {
     _clearCurrentLine();
     process.stdout.write(C.yellow(question));
-    const tmp = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    // Temporarily disable raw mode so readline works normally
+    const prevPickerActive = _pickerActive;
+    _pickerActive = true;
+
+    // Steal keypress listeners — prevents _rl from echoing while tmp reads.
+    // Never pause stdin (that blocks tmp from receiving data).
+    const savedKeypress = process.stdin.rawListeners('keypress');
+    process.stdin.removeAllListeners('keypress');
     if (process.stdin.isTTY) process.stdin.setRawMode(false);
-    tmp.question('', ans => {
-      tmp.close();
-      if (process.stdin.isTTY) process.stdin.setRawMode(true);
-      resolve(ans);
+
+    // terminal:false → tmp uses data events, no keypress/echo conflict with _rl
+    const tmp = readline.createInterface({
+      input: process.stdin, output: process.stdout, terminal: false,
     });
+
+    let settled = false;
+    function cleanup(ans) {
+      if (settled) return;
+      settled = true;
+      try { tmp.close(); } catch {}
+      try { if (process.stdin.isTTY) process.stdin.setRawMode(true); } catch {}
+      savedKeypress.forEach(l => { try { process.stdin.on('keypress', l); } catch {} });
+      _pickerActive = prevPickerActive;
+      if (!_pickerActive) _flushLogs();
+      resolve(ans);
+    }
+
+    tmp.once('line',  ans => cleanup(ans));
+    tmp.once('close', ()  => cleanup(''));  // stdin closed unexpectedly
   });
 }
 
@@ -342,6 +402,7 @@ const COMMANDS = [
   { cmd: '/memory',    desc: 'Reset memori percakapan' },
   { cmd: '/ltm',       desc: 'Lihat / hapus memori jangka panjang' },
   { cmd: '/search',    desc: 'Cari di web dari terminal' },
+  { cmd: '/polymarket', desc: 'Cari pasar prediksi Polymarket' },
   { cmd: '/tenant',    desc: 'Kelola tenant (list/add/switch/del)' },
   { cmd: '/skill',     desc: 'Kelola plugin/skill (list/add/info)' },
   { cmd: '/logout',    desc: 'Logout WhatsApp & hapus session' },
@@ -430,4 +491,128 @@ function showCmdPicker(callback) {
   draw();
 }
 
-module.exports = { init, appendChat, log, updateStatus, onInput, showAtPicker, showCmdPicker, ask };
+// ── selectMenu ────────────────────────────────────────────────
+// Generic interactive arrow-key list picker.
+// items: array of {label, desc} or strings.
+// opts.canSkip (default true) — show Esc=batal hint.
+// Returns Promise<number (0-based index)> or null if cancelled.
+function selectMenu(title, items, opts = {}) {
+  const MAX_SHOW = 12;
+  const INNER_W  = 56;
+  const LABEL_W  = 18;
+  const DESC_W   = INNER_W - 2 - 3 - 1 - LABEL_W - 1; // 31
+  const canSkip  = opts.canSkip !== false;
+
+  return new Promise(resolve => {
+    if (!items.length) { resolve(null); return; }
+
+    _pickerActive = true;
+
+    const norm = items.map(it =>
+      typeof it === 'string' ? { label: it, desc: '' } : { label: '', desc: '', ...it }
+    );
+
+    let selIdx    = 0;
+    let scrollTop = 0;
+    let drawnLines = 0;
+    // Skip any Enter keypress that was queued from the command that triggered this menu
+    let ready = false;
+    setImmediate(() => { ready = true; });
+
+    function clearDraw() {
+      if (drawnLines > 0) {
+        process.stdout.write(`\x1b[${drawnLines}A\x1b[0J`);
+        drawnLines = 0;
+      }
+    }
+
+    function draw() {
+      clearDraw();
+
+      if (selIdx < scrollTop) scrollTop = selIdx;
+      if (selIdx >= scrollTop + MAX_SHOW) scrollTop = selIdx - MAX_SHOW + 1;
+      scrollTop = Math.max(0, Math.min(scrollTop, Math.max(0, norm.length - MAX_SHOW)));
+
+      const visible = norm.slice(scrollTop, scrollTop + MAX_SHOW);
+      const lines = [];
+
+      lines.push(C.dim('  ┌' + '─'.repeat(INNER_W) + '┐'));
+      lines.push(C.dim('  │') + C.bold(C.cyan((' ' + title).slice(0, INNER_W).padEnd(INNER_W))) + C.dim('│'));
+      lines.push(C.dim('  ├' + '─'.repeat(INNER_W) + '┤'));
+
+      if (scrollTop > 0) {
+        lines.push(C.dim('  │') + C.dim(`  ↑ ${scrollTop} item di atas`.padEnd(INNER_W)) + C.dim('│'));
+      }
+
+      visible.forEach((item, vi) => {
+        const gi  = scrollTop + vi;
+        const num = String(gi + 1).padStart(2);
+        const lbl = String(item.label || '').slice(0, LABEL_W).padEnd(LABEL_W);
+        const dsc = String(item.desc  || '').slice(0, DESC_W).padEnd(DESC_W);
+
+        if (gi === selIdx) {
+          lines.push(
+            C.dim('  │') +
+            C.bgBlack(C.green(`► ${num}. `) + C.bold(C.white(lbl)) + ' ' + C.dim(dsc)) +
+            C.dim('│')
+          );
+        } else {
+          lines.push(
+            C.dim('  │') +
+            '  ' + C.dim(`${num}. `) + C.white(lbl) + ' ' + C.dim(dsc) +
+            C.dim('│')
+          );
+        }
+      });
+
+      const remaining = norm.length - (scrollTop + visible.length);
+      if (remaining > 0) {
+        lines.push(C.dim('  │') + C.dim(`  ↓ ${remaining} item di bawah`.padEnd(INNER_W)) + C.dim('│'));
+      }
+
+      lines.push(C.dim('  └' + '─'.repeat(INNER_W) + '┘'));
+      lines.push(C.dim(
+        canSkip
+          ? '  ↑↓:gerak  1-9:pilih cepat  Enter:pilih  Esc:batal'
+          : '  ↑↓:gerak  1-9:pilih cepat  Enter:pilih'
+      ));
+
+      process.stdout.write('\n' + lines.join('\n') + '\n');
+      drawnLines = lines.length + 1;
+    }
+
+    let restore;
+    let settled = false;
+
+    function done(idx) {
+      if (settled) return;
+      settled = true;
+      _pickerActive = false;
+      try { clearDraw(); } catch {}
+      try { if (restore) restore(); } catch {}
+      _flushLogs();
+      resolve(idx);
+    }
+
+    function onKey(ch, key) {
+      if (!key || !ready || settled) return;
+      switch (key.name) {
+        case 'escape': done(null); return;
+        case 'up':    selIdx = Math.max(0, selIdx - 1); draw(); return;
+        case 'down':  selIdx = Math.min(norm.length - 1, selIdx + 1); draw(); return;
+        case 'return':
+        case 'enter': done(selIdx); return;
+        default:
+          if (ch && /^[0-9]$/.test(ch) && !key.ctrl && !key.meta) {
+            const n = parseInt(ch) === 0 ? 10 : parseInt(ch);
+            if (n >= 1 && n <= norm.length) { selIdx = n - 1; draw(); }
+          }
+      }
+    }
+
+    restore = _stealKeypress(onKey);
+    draw();
+  });
+}
+
+module.exports = { init, appendChat, log, updateStatus, onInput, showAtPicker, showCmdPicker, ask, selectMenu };

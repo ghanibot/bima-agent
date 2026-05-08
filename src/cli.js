@@ -87,6 +87,7 @@ function cmdHelp() {
     ['/memory',    'Reset memori percakapan semua user'],
     ['/ltm',       'Lihat / hapus memori jangka panjang'],
     ['/search',    'Cari di web langsung dari terminal'],
+    ['/polymarket','Cari pasar prediksi di Polymarket'],
     ['/tenant',    'Kelola tenant (list/add/switch/del/groups)'],
     ['/skill',     'Kelola plugin/skill (list/add/remove/info)'],
     ['/watch',     'Monitor topik, kirim notif ke grup kalau berubah'],
@@ -156,13 +157,7 @@ async function cmdWA() {
 //  /model
 // ══════════════════════════════════════════════════════════════
 async function cmdModel() {
-  const { PROVIDER_NAMES, NO_KEY_PROVIDERS } = require('./ai');
-  const { isSetupDone, runWizard: _wiz } = require('./init');
-
-  // Re-use the same provider list from init.js
-  const { PROVIDERS: PROV_LIST } = (() => {
-    try { return require('./init'); } catch { return { PROVIDERS: [] }; }
-  })();
+  const { PROVIDER_NAMES } = require('./ai');
 
   const PROV = [
     { id: 'openrouter', ex: 'meta-llama/llama-3.1-8b-instruct:free', needKey: true,  needUrl: false },
@@ -178,15 +173,13 @@ async function cmdModel() {
     { id: 'compat',     ex: 'my-model',                              needKey: false, needUrl: true  },
   ];
 
-  let out = 'MODEL — Pilih AI Provider\n' + '─'.repeat(40) + '\n';
-  PROV.forEach((p, i) => {
-    out += `  ${String(i + 1).padStart(2)}. ${(PROVIDER_NAMES[p.id] || p.id).padEnd(24)} ${p.ex}\n`;
-  });
-  println(out);
-
-  const choice  = (await ask(' Pilih provider (1-11): ')).trim();
-  const prov    = PROV[parseInt(choice) - 1];
-  if (!prov) { println('✗ Pilihan tidak valid.'); return; }
+  const provItems = PROV.map(p => ({
+    label: PROVIDER_NAMES[p.id] || p.id,
+    desc:  p.ex,
+  }));
+  const provIdx = await ui.selectMenu('MODEL — Pilih AI Provider', provItems);
+  if (provIdx === null) { println('Dibatalkan.'); return; }
+  const prov = PROV[provIdx];
 
   const model = (await ask(` Model (Enter = ${prov.ex}): `)).trim() || prov.ex;
 
@@ -234,13 +227,10 @@ async function cmdSetGroup(type) {
   }
 
   if (type === 'output') {
-    let out = 'OUTPUT — Pilih Grup WhatsApp\n' + '─'.repeat(40) + '\n';
-    groups.forEach((g, i) => { out += `  ${String(i + 1).padStart(2)}. ${g.name}\n`; });
-    println(out);
-
-    const answer = (await ask(' Masukkan nomor grup: ')).trim();
-    const idx = parseInt(answer) - 1;
-    if (isNaN(idx) || !groups[idx]) { println('✗ Nomor tidak valid.'); return; }
+    const idx = await ui.selectMenu('OUTPUT — Pilih Grup WhatsApp',
+      groups.map(g => ({ label: g.name, desc: g.id.split('@')[0] }))
+    );
+    if (idx === null) { println('Dibatalkan.'); return; }
     saveConfig({ outputGroup: groups[idx].id, outputGroupName: groups[idx].name }, _currentTenant);
     println(`✓ Grup output diset ke: ${groups[idx].name}`);
     return;
@@ -251,34 +241,32 @@ async function cmdSetGroup(type) {
   const current = Array.isArray(cfg.inputGroups) ? cfg.inputGroups
                 : (cfg.inputGroup ? [cfg.inputGroup] : []);
 
-  let out = `INPUT — Grup Input WhatsApp (${_currentTenant})\n` + '─'.repeat(40) + '\n';
-
+  let statusOut = `INPUT — Grup Input WhatsApp (${_currentTenant})\n` + '─'.repeat(40) + '\n';
   if (current.length) {
-    out += 'Grup input aktif:\n';
+    statusOut += 'Grup input aktif:\n';
     current.forEach((jid, i) => {
       const grp = groups.find(g => g.id === jid);
-      out += `  ${i + 1}. ${grp ? grp.name : jid}\n`;
+      statusOut += `  ${i + 1}. ${grp ? grp.name : jid}\n`;
     });
   } else {
-    out += 'Belum ada grup input.\n';
+    statusOut += 'Belum ada grup input.\n';
   }
-  out += '\n  a. Tambah grup input baru\n';
-  if (current.length) out += '  r. Hapus grup dari list\n';
-  println(out);
+  println(statusOut);
 
-  const action = (await ask(' Pilih aksi (a/r): ')).trim().toLowerCase();
+  const actionItems = [
+    { label: 'Tambah grup input', desc: 'pilih dari daftar grup' },
+    ...(current.length ? [{ label: 'Hapus grup dari list', desc: `${current.length} grup aktif` }] : []),
+  ];
+  const actionIdx = await ui.selectMenu('INPUT — Pilih Aksi', actionItems);
+  if (actionIdx === null) { println('Dibatalkan.'); return; }
 
-  if (action === 'a') {
-    let grpOut = '';
-    groups.forEach((g, i) => {
-      const mark = current.includes(g.id) ? ' ✓' : '';
-      grpOut += `  ${String(i + 1).padStart(2)}. ${g.name}${mark}\n`;
-    });
-    println(grpOut);
-
-    const answer = (await ask(' Masukkan nomor grup: ')).trim();
-    const idx = parseInt(answer) - 1;
-    if (isNaN(idx) || !groups[idx]) { println('✗ Nomor tidak valid.'); return; }
+  if (actionIdx === 0) {
+    const grpItems = groups.map(g => ({
+      label: g.name,
+      desc:  current.includes(g.id) ? '✓ aktif' : '',
+    }));
+    const idx = await ui.selectMenu('INPUT — Pilih Grup', grpItems);
+    if (idx === null) { println('Dibatalkan.'); return; }
     const picked = groups[idx];
     if (current.includes(picked.id)) { println(`! Grup "${picked.name}" sudah ada di list.`); return; }
     const updated = [...current, picked.id];
@@ -290,25 +278,18 @@ async function cmdSetGroup(type) {
     }
     println(`✓ Grup "${picked.name}" ditambahkan ke input.`);
 
-  } else if (action === 'r' && current.length) {
-    let remOut = '';
-    current.forEach((jid, i) => {
+  } else if (actionIdx === 1 && current.length) {
+    const remItems = current.map(jid => {
       const grp = groups.find(g => g.id === jid);
-      remOut += `  ${i + 1}. ${grp ? grp.name : jid}\n`;
+      return { label: grp ? grp.name : jid, desc: jid.split('@')[0] };
     });
-    println(remOut);
-
-    const answer = (await ask(' Nomor yang dihapus: ')).trim();
-    const idx = parseInt(answer) - 1;
-    if (isNaN(idx) || !current[idx]) { println('✗ Nomor tidak valid.'); return; }
+    const idx = await ui.selectMenu('INPUT — Pilih Grup yang Dihapus', remItems);
+    if (idx === null) { println('Dibatalkan.'); return; }
     const removedJid = current[idx];
     const updated    = current.filter((_, i) => i !== idx);
     saveConfig({ inputGroups: updated, inputGroup: updated[0] || '', inputGroupName: groups.find(g => g.id === updated[0])?.name || '' }, _currentTenant);
     const grpName = groups.find(g => g.id === removedJid)?.name || removedJid;
     println(`✓ Grup "${grpName}" dihapus dari input.`);
-
-  } else {
-    println('Aksi tidak valid.');
   }
 }
 
@@ -345,25 +326,20 @@ async function cmdCompact() {
   if (!docs.length) { println('! Tidak ada dokumen untuk dikompres.'); return; }
   if (!cfg.provider || !cfg.apiKey) { println('✗ Set AI dulu via /model.'); return; }
 
-  let out = 'COMPACT — Kompresi Konteks\n' + '─'.repeat(40) + '\n';
-  out += '  1. Semua dokumen\n  2. Pilih dokumen tertentu';
-  println(out);
-
-  const mode = (await ask(' Pilih mode (1/2): ')).trim();
+  const modeIdx = await ui.selectMenu('COMPACT — Pilih Mode', [
+    { label: 'Semua dokumen',        desc: `${docs.length} dokumen` },
+    { label: 'Pilih dokumen tertentu', desc: 'pilih satu per satu' },
+  ]);
+  if (modeIdx === null) { println('Dibatalkan.'); return; }
 
   let targets = [];
-  if (mode === '1') {
+  if (modeIdx === 0) {
     targets = docs;
-  } else if (mode === '2') {
-    let docList = '';
-    docs.forEach((d, i) => { docList += `  ${i + 1}. ${d.file}\n`; });
-    println(docList);
-    const pick = (await ask(' Nomor dokumen (pisah koma, misal: 1,3): ')).trim();
-    targets = pick.split(',')
-      .map(x => docs[parseInt(x.trim()) - 1])
-      .filter(Boolean);
   } else {
-    println('✗ Pilihan tidak valid.'); return;
+    const docItems = docs.map(d => ({ label: d.file, desc: d.timestamp?.slice(0, 10) || '' }));
+    const pick = await ui.selectMenu('COMPACT — Pilih Dokumen', docItems);
+    if (pick === null) { println('Dibatalkan.'); return; }
+    targets = [docs[pick]];
   }
 
   if (!targets.length) { println('✗ Tidak ada target valid.'); return; }
@@ -471,22 +447,26 @@ async function handleQuestion(input) {
 // ══════════════════════════════════════════════════════════════
 async function cmdSTT() {
   const cfg = getConfig(_currentTenant);
-  let out = 'STT — Konfigurasi Voice Note\n' + '─'.repeat(40) + '\n';
-  out += '  1. Lokal (Whisper)  (offline, gratis, ~75MB — RECOMMENDED)\n';
-  out += '  2. Groq Whisper     (online, gratis 7200 mnt/hari, cepat)\n';
-  out += '  3. HuggingFace      (online, indonesian-nlp/multilingual-asr)\n';
-  out += '  4. OpenAI Whisper   (online, berbayar)\n';
-  out += `  5. Pakai AI key sekarang (${cfg.provider || '?'} — hanya jika OpenAI)`;
-  println(out);
-
-  const choice = (await ask(' Pilih (1-5): ')).trim();
+  const sttItems = [
+    { label: 'Lokal (Whisper)',      desc: 'offline, gratis, ~75MB — RECOMMENDED' },
+    { label: 'Groq Whisper',         desc: 'online, gratis 7200 mnt/hari, cepat' },
+    { label: 'HuggingFace',          desc: 'online, multilingual-asr' },
+    { label: 'OpenAI Whisper',       desc: 'online, berbayar' },
+    { label: 'Pakai AI key saat ini', desc: `${cfg.provider || '?'} — hanya jika OpenAI` },
+  ];
+  const sttIdx = await ui.selectMenu('STT — Konfigurasi Voice Note', sttItems);
+  if (sttIdx === null) { println('Dibatalkan.'); return; }
+  const choice = String(sttIdx + 1);
 
   if (choice === '1') {
-    println('  a. whisper-tiny  (75MB, ~1-2 detik/pesan — default)\n  b. whisper-base  (145MB, lebih akurat)\n  c. whisper-small (290MB, terbaik untuk Indonesia)');
-    const m = (await ask(' Pilih model (a/b/c, Enter=a): ')).trim() || 'a';
+    const whisperItems = [
+      { label: 'whisper-tiny',  desc: '75MB, ~1-2 detik/pesan — default' },
+      { label: 'whisper-base',  desc: '145MB, lebih akurat' },
+      { label: 'whisper-small', desc: '290MB, terbaik untuk Indonesia' },
+    ];
+    const mIdx = await ui.selectMenu('STT — Pilih Model Whisper', whisperItems);
     const models = ['Xenova/whisper-tiny', 'Xenova/whisper-base', 'Xenova/whisper-small'];
-    const mMap   = { a: models[0], b: models[1], c: models[2] };
-    const sttModel = mMap[m] || models[0];
+    const sttModel = models[mIdx ?? 0];
     saveConfig({ sttProvider: 'local', sttModel, sttKey: null }, _currentTenant);
     println(`✓ STT lokal: ${sttModel}\nModel didownload otomatis saat pertama kali dipakai.`);
     return;
@@ -629,20 +609,16 @@ async function cmdTenant(args) {
     }
 
     const current = new Set(t.groupJids || []);
-    groups.forEach((g, i) => {
-      const mark = current.has(g.id) ? ' ✓' : '';
-      out += `  ${String(i + 1).padStart(2)}. ${g.name}${mark}\n`;
-    });
     println(out);
 
-    const picks = (await ask(' Nomor grup (pisah koma, misal: 1,3): ')).trim();
-    if (picks) {
-      const jids = picks.split(',')
-        .map(x => groups[parseInt(x.trim()) - 1]?.id)
-        .filter(Boolean);
-      const merged = [...new Set([...current, ...jids])];
+    const grpIdx = await ui.selectMenu(`TENANT ${id} — Tambah Grup`,
+      groups.map(g => ({ label: g.name, desc: current.has(g.id) ? '✓ aktif' : '' }))
+    );
+    if (grpIdx !== null) {
+      const picked = groups[grpIdx];
+      const merged = [...new Set([...current, picked.id])];
       updateTenant(id, { groupJids: merged });
-      println(`✓ ${jids.length} grup ditambahkan ke tenant "${id}".`);
+      println(`✓ Grup "${picked.name}" ditambahkan ke tenant "${id}".`);
     }
     return;
   }
@@ -725,12 +701,11 @@ async function cmdWatch(args) {
     const hours = interval || parseInt((await ask(' Interval pengecekan (jam, Enter=6): ')).trim() || '6');
 
     // Target group
-    let out = 'Pilih grup tujuan notifikasi:\n';
-    groups.forEach((g, i) => { out += `  ${i + 1}. ${g.name}\n`; });
-    println(out);
-    const gChoice = (await ask(' Nomor grup: ')).trim();
-    const grp = groups[parseInt(gChoice) - 1];
-    if (!grp) { println('✗ Nomor tidak valid.'); return; }
+    const grpIdx = await ui.selectMenu('WATCH — Pilih Grup Notifikasi',
+      groups.map(g => ({ label: g.name, desc: g.id.split('@')[0] }))
+    );
+    if (grpIdx === null) { println('Dibatalkan.'); return; }
+    const grp = groups[grpIdx];
 
     const id = addWatch(_currentTenant, grp.id, topic, hours);
     println(`✓ Watch ditambahkan!\n  ID: ${id}\n  Topik: ${topic}\n  Interval: ${hours} jam\n  Notif ke: ${grp.name}`);
@@ -839,6 +814,20 @@ async function cmdSearch(query) {
     println('Hasil Web\n' + '─'.repeat(40) + '\n' + (result || 'Tidak ada hasil.'));
   } catch (e) {
     println(`✗ Error: ${e.message}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  /polymarket
+// ══════════════════════════════════════════════════════════════
+async function cmdPolymarket(query) {
+  const { searchMarkets, getTrendingMarkets } = require('./polymarket');
+  log('INFO', query ? `Polymarket: "${query}"...` : 'Polymarket: trending...');
+  try {
+    const result = query ? await searchMarkets(query) : await getTrendingMarkets();
+    println(result);
+  } catch (e) {
+    println(`✗ Error Polymarket: ${e.message}`);
   }
 }
 
@@ -1010,6 +999,7 @@ async function main() {
       else if (line === '/ltm')            { cmdLTM(); }
       else if (line.startsWith('/ltm del ')){ cmdLTMDelete(line.slice(9).trim()); }
       else if (line.startsWith('/search ')) { await cmdSearch(line.slice(8).trim()); }
+      else if (line === '/polymarket' || line.startsWith('/polymarket ')) { await cmdPolymarket(line.slice(12).trim()); }
       else if (line === '/tenant' || line.startsWith('/tenant ')) {
         const parts = line.slice(7).trim().split(/\s+/).filter(Boolean);
         await cmdTenant(parts);

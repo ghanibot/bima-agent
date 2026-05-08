@@ -8,13 +8,14 @@ const AUTH_DIR = process.env.BIMA_DATA
   ? path.join(process.env.BIMA_DATA, 'auth')
   : path.join(os.homedir(), '.bima', 'auth');
 
-let sock          = null;
-let botId         = '';
-let botIdentities = new Set();
-let state         = { connected: false, groups: [] };
-let logFn         = () => {};
-let started       = false;
-let watchdogTimer = null;
+let sock              = null;
+let botId             = '';
+let botIdentities     = new Set();
+let state             = { connected: false, groups: [] };
+let logFn             = () => {};
+let started           = false;
+let watchdogTimer     = null;
+let _reconnectAttempts = 0;
 
 const msgStore = new Map();
 
@@ -192,6 +193,7 @@ async function startWA(logger) {
 
       if (connection === 'open') {
         state.connected = true;
+        _reconnectAttempts = 0;
         const user = sock.user || {};
         const uid  = user.id || '';
         botId = uid.split(':')[0].split('@')[0];
@@ -213,12 +215,25 @@ async function startWA(logger) {
 
       if (connection === 'close') {
         state.connected = false;
-        const code = lastDisconnect?.error?.output?.statusCode;
+        const code        = lastDisconnect?.error?.output?.statusCode;
         const isLoggedOut = code === DisconnectReason.loggedOut;
-        const delay = code === 408 ? 1500 : 4000;
-        logFn('WA', `Koneksi terputus (${code || '?'}). ${!isLoggedOut ? `Reconnect dalam ${delay / 1000}s...` : 'Logged out.'}`);
-        if (!isLoggedOut) setTimeout(connect, delay);
-        else started = false;
+        const isReplaced  = code === 440; // connectionReplaced — another device took session
+
+        if (isLoggedOut) {
+          logFn('WA', `Logout (${code}). Ketik /wa untuk scan QR ulang.`);
+          _reconnectAttempts = 0;
+          started = false;
+        } else if (isReplaced) {
+          logFn('WA', `Sesi digantikan perangkat lain (440). Ketik /wa untuk reconnect manual.`);
+          _reconnectAttempts = 0;
+          started = false;
+        } else {
+          _reconnectAttempts++;
+          // Exponential backoff: 2s, 3s, 4.5s, 6.75s … capped at 30s
+          const delay = Math.min(30_000, 2000 * Math.pow(1.5, _reconnectAttempts - 1));
+          logFn('WA', `Koneksi terputus (${code || '?'}). Reconnect dalam ${Math.round(delay / 1000)}s... (percobaan ${_reconnectAttempts})`);
+          setTimeout(connect, delay);
+        }
       }
     });
 
@@ -371,7 +386,7 @@ async function handleMsg(msg) {
   try {
     const { logMsg: logGroupMsg } = require('./grouplog');
     logGroupMsg(tenantId, jid, {
-      senderJid,
+      senderJid: sender,
       senderName: msg.pushName || sender.split('@')[0].split(':')[0],
       text:       text || (locMsg ? '[Kirim lokasi]' : '[Media]'),
       type:       locMsg ? 'location' : (text ? 'text' : 'media'),
