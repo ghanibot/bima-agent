@@ -156,6 +156,17 @@ async function startWA(logger) {
     logFn
   );
 
+  // Start topic watcher
+  try {
+    const { startWatcher } = require('./watcher');
+    const { webSearch }    = require('./search');
+    startWatcher(async (tenantId, jid, topic, summary) => {
+      logFn('WATCH', `Change detected: "${topic}" → ${jid}`);
+      await sendMsg(jid, summary);
+    }, webSearch);
+    logFn('INFO', 'Topic watcher aktif.');
+  } catch (e) { logFn('DEBUG', `Watcher skip: ${e.message}`); }
+
   function connect() {
     sock = makeWASocket({
       version,
@@ -337,6 +348,12 @@ async function handleMsg(msg) {
 
   const text   = extractText(msg);
   const locMsg = msg.message?.locationMessage;
+
+  // Track member profile on every group message
+  try {
+    const { trackMessage } = require('./profiles');
+    trackMessage(tenantId, sender, msg.pushName || '', text);
+  } catch {}
 
   // ── /voice command: reply any message with /voice ─────────
   if (text.trim().toLowerCase() === '/voice' && quotedRaw) {
@@ -731,9 +748,17 @@ async function handleQuery(msg, jid, text, cfg, senderJid, tenantId) {
     const { runAgent } = require('./agent');
     const wantWeb = /\b(cari\s*(di\s*)?(internet|web|google|online)|search\s*(online|web|internet))\b/i.test(question);
 
-    const agentQuestion = wantWeb
-      ? `[HINT: user minta cari di internet] ${question}`
-      : question;
+    // Inject member profile context
+    let profilePrefix = '';
+    try {
+      const { buildProfileContext } = require('./profiles');
+      profilePrefix = buildProfileContext(tid, senderJid, msg.pushName || '');
+    } catch {}
+
+    const agentQuestion = [
+      profilePrefix,
+      wantWeb ? `[HINT: user minta cari di internet] ${question}` : question,
+    ].filter(Boolean).join('\n\n');
 
     let searchIndicatorSent = false;
     const onToolCall = async (action) => {

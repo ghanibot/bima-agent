@@ -5,12 +5,17 @@ const MAX_STEPS_SIMPLE   = 4;   // pertanyaan singkat
 
 // ── System prompt ─────────────────────────────────────────────
 // Built dynamically so current date is always fresh
-function buildSystemPrompt() {
+function buildSystemPrompt(cfg) {
   const now = new Date().toLocaleString('id-ID', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta',
   });
-  return `Kamu adalah Bima, WhatsApp AI Agent dari Indonesia yang cerdas dan adaptif.
+
+  // Language instruction
+  const { langInstruction } = require('./languages');
+  const langSuffix = cfg?.language ? langInstruction(cfg.language) : '';
+
+  return `Kamu adalah Bima, WhatsApp AI Agent dari Indonesia yang cerdas dan adaptif.${langSuffix}
 
 ⚠️ KONTEKS WAKTU: Sekarang ${now} WIB.
 ⚠️ KNOWLEDGE CUTOFF: Training-mu berakhir awal 2024 — data setelah itu TIDAK kamu ketahui.
@@ -117,7 +122,7 @@ async function runAgent(question, history, cfg, ltmContext, onToolCall, tenantId
 
     let raw;
     try {
-      raw = await callAI(agentMessages, buildSystemPrompt(), cfg);
+      raw = await callAI(agentMessages, buildSystemPrompt(cfg), cfg);
     } catch (e) {
       if (steps.length === 0) {
         try {

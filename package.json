@@ -4,7 +4,7 @@
   "description": "WhatsApp AI Agent CLI for Indonesia — multi-tenant, plugin system, semantic search, web research & voice notes",
   "main": "src/cli.js",
   "bin": {
-    "bima": "./bin/bima.js"
+    "bima": "bin/bima.js"
   },
   "files": [
     "bin/",

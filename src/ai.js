@@ -2,26 +2,45 @@
 
 const { getConfig } = require('./config');
 
-// ── Build HTTP request ────────────────────────────────────────
+// ── Provider registry ─────────────────────────────────────────
+// All OpenAI-compatible providers share the same request format
+const OAI_COMPAT = {
+  openai:     cfg => `https://api.openai.com/v1`,
+  openrouter: cfg => `https://openrouter.ai/api/v1`,
+  groq:       cfg => `https://api.groq.com/openai/v1`,
+  mistral:    cfg => `https://api.mistral.ai/v1`,
+  together:   cfg => `https://api.together.xyz/v1`,
+  deepseek:   cfg => `https://api.deepseek.com/v1`,
+  fireworks:  cfg => `https://api.fireworks.ai/inference/v1`,
+  ollama:     cfg => `${(cfg.baseUrl || 'http://localhost:11434').replace(/\/$/, '')}/v1`,
+  lmstudio:   cfg => `${(cfg.baseUrl || 'http://localhost:1234').replace(/\/$/, '')}/v1`,
+  compat:     cfg => `${(cfg.baseUrl || '').replace(/\/$/, '')}/v1`,
+};
+
+const PROVIDER_NAMES = {
+  openai:     'OpenAI',
+  anthropic:  'Anthropic',
+  gemini:     'Google Gemini',
+  openrouter: 'OpenRouter (100+ model)',
+  groq:       'Groq (cepat & gratis)',
+  mistral:    'Mistral AI',
+  together:   'Together AI',
+  deepseek:   'DeepSeek',
+  fireworks:  'Fireworks AI',
+  ollama:     'Ollama (lokal)',
+  lmstudio:   'LM Studio (lokal)',
+  compat:     'OpenAI-compatible (custom URL)',
+};
+
+// Providers that don't need an API key
+const NO_KEY_PROVIDERS = new Set(['ollama', 'lmstudio']);
+
+// ── Build HTTP request ─────────────────────────────────────────
 function buildReq(cfg, messages, system) {
-  const { provider, model, apiKey } = cfg;
+  const { provider, model, apiKey, baseUrl } = cfg;
+  const sys = system || 'Kamu adalah Bima, asisten AI cerdas. Jawab to the point.';
 
-  const sys = system || 'Kamu adalah Bima, asisten AI cerdas berbahasa Indonesia. Jawab santai dan to the point.';
-
-  if (provider === 'openai' || provider === 'openrouter') {
-    return {
-      url: provider === 'openrouter'
-        ? 'https://openrouter.ai/api/v1/chat/completions'
-        : 'https://api.openai.com/v1/chat/completions',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://bima-agent.id' } : {}),
-      },
-      body: { model, messages: [{ role: 'system', content: sys }, ...messages], max_tokens: 2000 },
-    };
-  }
-
+  // Anthropic — different format
   if (provider === 'anthropic') {
     return {
       url: 'https://api.anthropic.com/v1/messages',
@@ -31,13 +50,48 @@ function buildReq(cfg, messages, system) {
         'anthropic-version': '2023-06-01',
       },
       body: { model, system: sys, messages, max_tokens: 2000 },
+      _provider: 'anthropic',
     };
   }
 
-  throw new Error(`Provider tidak dikenal: ${provider}`);
+  // Google Gemini — different format
+  if (provider === 'gemini') {
+    const geminiMessages = messages.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }],
+    }));
+    return {
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      headers: { 'Content-Type': 'application/json' },
+      body: {
+        systemInstruction: { parts: [{ text: sys }] },
+        contents: geminiMessages,
+        generationConfig: { maxOutputTokens: 2000 },
+      },
+      _provider: 'gemini',
+    };
+  }
+
+  // OpenAI-compatible providers
+  const baseUrlFn = OAI_COMPAT[provider];
+  if (!baseUrlFn) throw new Error(`Provider tidak dikenal: ${provider}`);
+
+  const base    = baseUrlFn(cfg);
+  const headers = {
+    'Content-Type':  'application/json',
+    'Authorization': `Bearer ${apiKey || 'ollama'}`,
+    ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://github.com/ghanibot/bima-agent' } : {}),
+  };
+
+  return {
+    url: `${base}/chat/completions`,
+    headers,
+    body: { model, messages: [{ role: 'system', content: sys }, ...messages], max_tokens: 2000 },
+    _provider: 'openai-compat',
+  };
 }
 
-// ── Build image content block (provider-aware) ────────────────
+// ── Image content blocks ───────────────────────────────────────
 function buildImageContent(provider, base64Data, mimeType, textCaption) {
   if (provider === 'anthropic') {
     const blocks = [
@@ -46,35 +100,41 @@ function buildImageContent(provider, base64Data, mimeType, textCaption) {
     if (textCaption) blocks.push({ type: 'text', text: textCaption });
     return blocks;
   }
-  // OpenAI / OpenRouter
-  const parts = [
-    { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Data}` } },
-  ];
+  if (provider === 'gemini') {
+    const parts = [{ inline_data: { mime_type: mimeType, data: base64Data } }];
+    if (textCaption) parts.push({ text: textCaption });
+    return parts;
+  }
+  // OpenAI-compatible
+  const parts = [{ type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Data}` } }];
   if (textCaption) parts.push({ type: 'text', text: textCaption });
   return parts;
 }
 
-function parseReply(provider, data) {
-  if (provider === 'anthropic') return data?.content?.[0]?.text || null;
+function parseReply(req, data) {
+  if (req._provider === 'anthropic') return data?.content?.[0]?.text || null;
+  if (req._provider === 'gemini')    return data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
   return data?.choices?.[0]?.message?.content || null;
 }
 
-// ── Core call ─────────────────────────────────────────────────
+// ── Core call ──────────────────────────────────────────────────
 async function callAI(messages, system, cfgOverride) {
   const cfg = cfgOverride || getConfig();
-  if (!cfg.provider || !cfg.apiKey) throw new Error('AI belum dikonfigurasi. Ketik /model');
+  if (!cfg.provider) throw new Error('AI belum dikonfigurasi. Ketik /model');
+  if (!cfg.apiKey && !NO_KEY_PROVIDERS.has(cfg.provider)) throw new Error('API key belum diset. Ketik /model');
 
   const req = buildReq(cfg, messages, system);
   const res = await fetch(req.url, {
     method:  'POST',
     headers: req.headers,
     body:    JSON.stringify(req.body),
+    signal:  AbortSignal.timeout(30000),
   });
 
   const data = await res.json();
-  if (!res.ok) throw new Error(`API ${res.status}: ${data?.error?.message || JSON.stringify(data)}`);
+  if (!res.ok) throw new Error(`API ${res.status}: ${data?.error?.message || data?.message || JSON.stringify(data).slice(0, 200)}`);
 
-  const reply = parseReply(cfg.provider, data);
+  const reply = parseReply(req, data);
   if (!reply) throw new Error('Respons AI kosong');
   return reply;
 }
@@ -82,27 +142,20 @@ async function callAI(messages, system, cfgOverride) {
 // ── Test connection ────────────────────────────────────────────
 async function testAI(cfg) {
   try {
-    await callAI([{ role: 'user', content: 'Balas hanya: OK' }], 'Balas singkat: OK', cfg);
+    await callAI([{ role: 'user', content: 'Reply only: OK' }], 'Reply: OK', cfg);
     return true;
   } catch { return false; }
 }
 
-// ── Answer from knowledge context ────────────────────────────
+// ── Answer from knowledge context ─────────────────────────────
 async function answerQuestion(question, context, cfgOverride) {
-  const sys = `Kamu adalah Bima, asisten AI WhatsApp cerdas dari Indonesia.
-Gunakan konteks data yang diberikan untuk menjawab pertanyaan.
-Jawab dengan bahasa Indonesia yang santai dan informatif.
+  const sys = `Kamu adalah Bima, asisten AI WhatsApp dari Indonesia.
+Gunakan konteks data untuk menjawab. Jawab santai dan informatif.
 
-ATURAN FORMAT (WAJIB — ini pesan WhatsApp, bukan web):
-- DILARANG KERAS pakai tabel markdown (|---|---|). WhatsApp tidak render tabel, jadi berantakan.
-- Format data sebagai list bernomor atau bullet. Contoh:
-  1. *Nama:* Fajri B → Burung | Plastik Merah | 5kg | Rp25.000 LUNAS
-  2. *Nama:* Jeslin J → Burung | Plastik Hitam | 6kg | Rp45.000 LUNAS
-- Pisahkan tiap item dengan baris baru.
+FORMAT (pesan WhatsApp — bukan web):
+- DILARANG tabel markdown. Gunakan list bernomor/bullet.
 - Pakai *teks tebal* untuk label penting.
-- Jika pertanyaan SPESIFIK (misal "siapa penerima tanggal 16"), tampilkan HANYA data relevan, bukan semua.
-- Jika user minta "data lengkap" atau "semua data", baru tampilkan seluruh isi.
-- Jika tidak ada info relevan, bilang jujur tapi tetap bantu sebisamu.`;
+- Jika tidak ada info relevan, bilang jujur.`;
 
   const content = context
     ? `Konteks data:\n${context}\n\nPertanyaan: ${question}`
@@ -111,23 +164,13 @@ ATURAN FORMAT (WAJIB — ini pesan WhatsApp, bukan web):
   return callAI([{ role: 'user', content }], sys, cfgOverride);
 }
 
-// ── Structure file text into JSON ────────────────────────────
+// ── Structure file text into JSON ─────────────────────────────
 async function structureText(rawText) {
-  const prompt = `Kamu menerima teks hasil ekstraksi dari file Excel/PDF yang mungkin berantakan.
-Tugasmu: bersihkan, rapikan, dan strukturkan menjadi JSON.
+  const prompt = `Bersihkan dan strukturkan teks ini menjadi JSON valid.
+Aturan: identifikasi header/kolom, setiap baris jadi object dalam array "data", tambahkan "meta".
+Balas HANYA JSON valid.\n\nTeks:\n${rawText.slice(0, 3000)}`;
 
-Aturan:
-- Identifikasi header/kolom dari tabel secara otomatis
-- Setiap baris data jadi satu object dalam array "data"
-- Bersihkan spasi berlebih, karakter aneh, baris kosong
-- Pertahankan semua nilai angka, nama, tanggal secara akurat
-- Tambahkan field "meta" berisi judul dokumen, tanggal, dan info header jika ada
-- Balas HANYA dengan JSON valid, tanpa teks lain
-
-Teks:
-${rawText.slice(0, 3000)}`;
-
-  const reply = await callAI([{ role: 'user', content: prompt }], 'Kamu adalah ekstraktor dan pembersih data JSON yang teliti.');
+  const reply = await callAI([{ role: 'user', content: prompt }], 'Kamu ekstraktor data JSON yang teliti.');
   try {
     return JSON.parse(reply.replace(/```json|```/gi, '').trim());
   } catch {
@@ -135,38 +178,24 @@ ${rawText.slice(0, 3000)}`;
   }
 }
 
-// ── Compact/summarize for context compression ────────────────
+// ── Compact/summarize for context compression ─────────────────
 async function compactContext(rawText, filename, cfgOverride) {
-  const sys = `Kamu adalah sistem kompresi konteks data.
-Tugasmu: ringkas teks menjadi bentuk padat TANPA kehilangan fakta penting.
-
-WAJIB pertahankan:
-- Semua nama orang, perusahaan, lokasi
-- Semua angka, jumlah, harga, berat
-- Semua tanggal dan waktu
-- Semua status (lunas, belum, pending, dll)
-- Struktur tabel/list (konversi ke format ringkas)
-
-Output: ringkasan terstruktur bahasa Indonesia. Jangan buang data apapun.`;
-
-  const prompt = `File: ${filename}\n\nTeks asli (${rawText.length} karakter):\n${rawText.slice(0, 6000)}\n\nBuat ringkasan padat yang mempertahankan SEMUA data penting.`;
+  const sys = `Ringkas teks menjadi bentuk padat TANPA kehilangan fakta penting.
+Pertahankan: semua nama, angka, harga, tanggal, status. Output bahasa Indonesia.`;
+  const prompt = `File: ${filename}\n\nTeks:\n${rawText.slice(0, 6000)}\n\nBuat ringkasan padat.`;
   return callAI([{ role: 'user', content: prompt }], sys, cfgOverride);
 }
 
-// ── Analyze image with vision ─────────────────────────────────
+// ── Analyze image with vision ──────────────────────────────────
 async function analyzeImage(imageBuffer, mimeType, caption, cfgOverride) {
   const cfg = cfgOverride || getConfig();
-  if (!cfg.provider || !cfg.apiKey) throw new Error('AI belum dikonfigurasi.');
+  if (!cfg.provider) throw new Error('AI belum dikonfigurasi.');
 
   const base64 = imageBuffer.toString('base64');
-  const prompt  = caption || 'Jelaskan isi gambar ini secara detail dalam Bahasa Indonesia.';
+  const prompt  = caption || 'Jelaskan isi gambar ini secara detail.';
+  const sys     = 'Kamu Bima, asisten AI WhatsApp Indonesia. Analisis gambar, jawab santai. Jangan pakai tabel markdown.';
 
   const contentBlocks = buildImageContent(cfg.provider, base64, mimeType || 'image/jpeg', prompt);
-
-  const sys = `Kamu adalah Bima, asisten AI WhatsApp dari Indonesia.
-Analisis gambar dan jawab dengan bahasa Indonesia yang santai dan informatif.
-Format: gunakan bullet point, jangan tabel markdown.`;
-
   const messages = [{ role: 'user', content: contentBlocks }];
 
   const req = buildReq(cfg, messages, sys);
@@ -174,12 +203,15 @@ Format: gunakan bullet point, jangan tabel markdown.`;
     method:  'POST',
     headers: req.headers,
     body:    JSON.stringify(req.body),
+    signal:  AbortSignal.timeout(30000),
   });
 
   const data = await res.json();
-  if (!res.ok) throw new Error(`API ${res.status}: ${data?.error?.message || JSON.stringify(data)}`);
-
-  return parseReply(cfg.provider, data) || 'Tidak bisa menganalisis gambar.';
+  if (!res.ok) throw new Error(`API ${res.status}: ${data?.error?.message || JSON.stringify(data).slice(0, 200)}`);
+  return parseReply(req, data) || 'Tidak bisa menganalisis gambar.';
 }
 
-module.exports = { callAI, testAI, answerQuestion, structureText, compactContext, analyzeImage };
+module.exports = {
+  callAI, testAI, answerQuestion, structureText, compactContext, analyzeImage,
+  PROVIDER_NAMES, NO_KEY_PROVIDERS, OAI_COMPAT,
+};

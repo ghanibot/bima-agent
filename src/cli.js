@@ -89,6 +89,8 @@ function cmdHelp() {
     ['/search',    'Cari di web langsung dari terminal'],
     ['/tenant',    'Kelola tenant (list/add/switch/del/groups)'],
     ['/skill',     'Kelola plugin/skill (list/add/remove/info)'],
+    ['/watch',     'Monitor topik, kirim notif ke grup kalau berubah'],
+    ['/profiles',  'Lihat profil member yang sudah berinteraksi'],
     ['/logout',    'Logout WhatsApp & hapus session'],
     ['/clear',     'Bersihkan layar'],
     ['/exit',      'Keluar dari Bima'],
@@ -154,40 +156,64 @@ async function cmdWA() {
 //  /model
 // ══════════════════════════════════════════════════════════════
 async function cmdModel() {
-  println('MODEL — Konfigurasi AI\n─'.repeat(1) + '\n1. OpenAI (gpt-4o-mini, gpt-4o)\n2. Anthropic (claude-3-haiku, claude-3-5-sonnet)\n3. OpenRouter (akses 100+ model)');
+  const { PROVIDER_NAMES, NO_KEY_PROVIDERS } = require('./ai');
+  const { isSetupDone, runWizard: _wiz } = require('./init');
 
-  const providers = { '1': 'openai', '2': 'anthropic', '3': 'openrouter' };
-  const examples  = {
-    openai:     'gpt-4o-mini',
-    anthropic:  'claude-3-haiku-20240307',
-    openrouter: 'meta-llama/llama-3-8b-instruct',
-  };
+  // Re-use the same provider list from init.js
+  const { PROVIDERS: PROV_LIST } = (() => {
+    try { return require('./init'); } catch { return { PROVIDERS: [] }; }
+  })();
 
-  const choice = (await ask(' Pilih provider (1/2/3): ')).trim();
-  const provider = providers[choice];
-  if (!provider) { println('✗ Pilihan tidak valid.'); return; }
+  const PROV = [
+    { id: 'openrouter', ex: 'meta-llama/llama-3.1-8b-instruct:free', needKey: true,  needUrl: false },
+    { id: 'openai',     ex: 'gpt-4o-mini',                           needKey: true,  needUrl: false },
+    { id: 'anthropic',  ex: 'claude-3-haiku-20240307',               needKey: true,  needUrl: false },
+    { id: 'gemini',     ex: 'gemini-1.5-flash',                      needKey: true,  needUrl: false },
+    { id: 'groq',       ex: 'llama-3.1-8b-instant',                  needKey: true,  needUrl: false },
+    { id: 'mistral',    ex: 'mistral-small-latest',                   needKey: true,  needUrl: false },
+    { id: 'deepseek',   ex: 'deepseek-chat',                         needKey: true,  needUrl: false },
+    { id: 'together',   ex: 'meta-llama/Llama-3-8b-chat-hf',        needKey: true,  needUrl: false },
+    { id: 'ollama',     ex: 'llama3',                                 needKey: false, needUrl: true  },
+    { id: 'lmstudio',   ex: 'local-model',                           needKey: false, needUrl: true  },
+    { id: 'compat',     ex: 'my-model',                              needKey: false, needUrl: true  },
+  ];
 
-  println(`✓ Provider: ${provider}`);
+  let out = 'MODEL — Pilih AI Provider\n' + '─'.repeat(40) + '\n';
+  PROV.forEach((p, i) => {
+    out += `  ${String(i + 1).padStart(2)}. ${(PROVIDER_NAMES[p.id] || p.id).padEnd(24)} ${p.ex}\n`;
+  });
+  println(out);
 
-  const ex = examples[provider];
-  const model = (await ask(` Nama model (contoh: ${ex}): `)).trim();
-  if (!model) { println('✗ Model tidak boleh kosong.'); return; }
+  const choice  = (await ask(' Pilih provider (1-11): ')).trim();
+  const prov    = PROV[parseInt(choice) - 1];
+  if (!prov) { println('✗ Pilihan tidak valid.'); return; }
 
-  const apiKey = (await ask(' API Key: ')).trim();
-  if (!apiKey) { println('✗ API Key tidak boleh kosong.'); return; }
+  const model = (await ask(` Model (Enter = ${prov.ex}): `)).trim() || prov.ex;
 
-  println('⏳ Menguji API...');
-  const ok = await testAI({ provider, model, apiKey });
-
-  if (!ok) {
-    println('✗ API Key atau model tidak valid. Konfigurasi tidak disimpan.');
-    return;
+  let baseUrl = '';
+  if (prov.needUrl) {
+    const defUrl = prov.id === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234';
+    baseUrl = (await ask(` Base URL (Enter = ${defUrl}): `)).trim() || defUrl;
   }
 
-  saveConfig({ provider, model, apiKey }, _currentTenant);
-  println(`✓ Konfigurasi berhasil disimpan!\n  Provider : ${provider}\n  Model    : ${model}\n  API Key  : ${maskKey(apiKey)}`);
+  let apiKey = '';
+  if (prov.needKey) {
+    apiKey = (await ask(' API Key: ')).trim();
+    if (!apiKey) { println('✗ API Key tidak boleh kosong.'); return; }
+  }
 
-  ui.updateStatus({ provider, model, waConnected: getWAStatus().connected, tenant: _currentTenant });
+  println('⏳ Menguji koneksi...');
+  const cfg = { provider: prov.id, model, apiKey, ...(baseUrl ? { baseUrl } : {}) };
+  const ok  = await testAI(cfg);
+
+  if (!ok && prov.needKey) {
+    println('✗ Koneksi gagal. Periksa API key / model.'); return;
+  }
+  if (!ok) println('⚠ Koneksi lokal gagal — pastikan server running.');
+
+  saveConfig(cfg, _currentTenant);
+  println(`✓ Disimpan!\n  Provider : ${prov.id}\n  Model    : ${model}${baseUrl ? '\n  Base URL : ' + baseUrl : ''}${apiKey ? '\n  API Key  : ' + maskKey(apiKey) : ''}`);
+  ui.updateStatus({ provider: prov.id, model, waConnected: getWAStatus().connected, tenant: _currentTenant });
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -655,6 +681,108 @@ function cmdLTMDelete(id) {
 }
 
 // ══════════════════════════════════════════════════════════════
+//  /watch — topic watcher
+// ══════════════════════════════════════════════════════════════
+async function cmdWatch(args) {
+  const { addWatch, removeWatch, listWatches } = require('./watcher');
+  const sub = args[0];
+
+  if (!sub || sub === 'list') {
+    const watches = listWatches(_currentTenant);
+    let out = `WATCH — ${watches.length} topik dipantau\n` + '─'.repeat(40) + '\n';
+    if (!watches.length) {
+      out += 'Belum ada topik. Gunakan: /watch add <topik> [jam]\n';
+      out += 'Contoh: /watch add "harga bbm" 6\n';
+    } else {
+      watches.forEach((w, i) => {
+        const last = w.lastCheck ? new Date(w.lastCheck).toLocaleString('id-ID') : 'belum dicek';
+        out += `  ${i + 1}. [${w.id}] ${w.topic}\n`;
+        out += `     Interval: ${w.intervalHours}j | Terakhir: ${last}\n`;
+        out += `     Grup: ${w.jid}\n`;
+      });
+      out += '\nHapus: /watch del <id>';
+    }
+    out += '\n' + '─'.repeat(40);
+    println(out);
+    return;
+  }
+
+  if (sub === 'add') {
+    const wa = getWAStatus();
+    if (!wa.connected) { println('! WA belum terhubung. Jalankan /wa dulu.'); return; }
+
+    const groups = wa.groups || [];
+    if (!groups.length) { println('! Belum ada grup ditemukan.'); return; }
+
+    // Topic
+    const rawTopic = args.slice(1).join(' ').replace(/["']/g, '').trim();
+    const topic = rawTopic || (await ask(' Topik yang dipantau: ')).trim();
+    if (!topic) { println('✗ Topik tidak boleh kosong.'); return; }
+
+    // Interval
+    const lastArg = parseInt(args[args.length - 1]);
+    const interval = (!isNaN(lastArg) && lastArg !== parseInt(topic)) ? lastArg : null;
+    const hours = interval || parseInt((await ask(' Interval pengecekan (jam, Enter=6): ')).trim() || '6');
+
+    // Target group
+    let out = 'Pilih grup tujuan notifikasi:\n';
+    groups.forEach((g, i) => { out += `  ${i + 1}. ${g.name}\n`; });
+    println(out);
+    const gChoice = (await ask(' Nomor grup: ')).trim();
+    const grp = groups[parseInt(gChoice) - 1];
+    if (!grp) { println('✗ Nomor tidak valid.'); return; }
+
+    const id = addWatch(_currentTenant, grp.id, topic, hours);
+    println(`✓ Watch ditambahkan!\n  ID: ${id}\n  Topik: ${topic}\n  Interval: ${hours} jam\n  Notif ke: ${grp.name}`);
+    return;
+  }
+
+  if (sub === 'del' || sub === 'remove') {
+    const id = args[1];
+    if (!id) { println('Contoh: /watch del abc123'); return; }
+    const ok = removeWatch(_currentTenant, id);
+    println(ok ? `✓ Watch ${id} dihapus.` : `✗ Watch ${id} tidak ditemukan.`);
+    return;
+  }
+
+  println('Subcommand: list | add <topik> [jam] | del <id>');
+}
+
+// ══════════════════════════════════════════════════════════════
+//  /profiles — member profiles
+// ══════════════════════════════════════════════════════════════
+function cmdProfiles(args) {
+  const { getAllProfiles, deleteProfile } = require('./profiles');
+
+  if (args[0] === 'del') {
+    const jid = args[1];
+    if (!jid) { println('Contoh: /profiles del 628xxx'); return; }
+    const ok = deleteProfile(_currentTenant, jid);
+    println(ok ? `✓ Profil ${jid} dihapus.` : '✗ Profil tidak ditemukan.');
+    return;
+  }
+
+  const profiles = getAllProfiles(_currentTenant);
+  let out = `PROFILES — ${profiles.length} member\n` + '─'.repeat(40) + '\n';
+
+  if (!profiles.length) {
+    out += 'Belum ada profil. Profil dibuat otomatis saat member berinteraksi dengan Bima.';
+  } else {
+    profiles.slice(0, 20).forEach((p, i) => {
+      const last = p.lastSeen ? p.lastSeen.slice(0, 10) : '?';
+      out += `  ${i + 1}. ${p.name} (${p.jid?.split('@')[0] || '?'})\n`;
+      out += `     ${p.messageCount}x chat | Terakhir: ${last}\n`;
+      if (p.topics?.length) out += `     Topik: ${p.topics.slice(0, 4).join(', ')}\n`;
+    });
+    if (profiles.length > 20) out += `  ... dan ${profiles.length - 20} lainnya\n`;
+    out += '\nHapus: /profiles del <jid>';
+  }
+
+  out += '\n' + '─'.repeat(40);
+  println(out);
+}
+
+// ══════════════════════════════════════════════════════════════
 //  /tts — configure Text-to-Speech voice
 // ══════════════════════════════════════════════════════════════
 function cmdTTS(args) {
@@ -865,6 +993,14 @@ async function main() {
       else if (line === '/knowledge')      { cmdKnowledge(); }
       else if (line === '/compact')        { await cmdCompact(); }
       else if (line === '/stt')            { await cmdSTT(); }
+      else if (line === '/watch' || line.startsWith('/watch ')) {
+        const parts = line.slice(6).trim().split(/\s+/).filter(Boolean);
+        await cmdWatch(parts);
+      }
+      else if (line === '/profiles' || line.startsWith('/profiles ')) {
+        const parts = line.slice(9).trim().split(/\s+/).filter(Boolean);
+        cmdProfiles(parts);
+      }
       else if (line === '/tts' || line.startsWith('/tts ')) {
         const parts = line.slice(4).trim().split(/\s+/).filter(Boolean);
         cmdTTS(parts);
