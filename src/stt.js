@@ -102,6 +102,15 @@ async function transcribeWhisper(audioBuffer, apiKey, provider) {
   return (data.text || '').trim();
 }
 
+// ── ffmpeg path — prefer ffmpeg-static, fall back to system ffmpeg ──
+function getFfmpegPath() {
+  try {
+    const p = require('ffmpeg-static');
+    if (p) return p;
+  } catch {}
+  return 'ffmpeg';
+}
+
 // ── Local Whisper via @xenova/transformers ────────────────────
 // First call downloads model (~75MB tiny / ~300MB small) — cached forever after
 let _localPipeline = null;
@@ -111,7 +120,7 @@ async function transcribeLocal(audioBuffer, modelId) {
   const fs   = require('fs');
   const path = require('path');
   const { spawn } = require('child_process');
-  const ffmpegPath = require('ffmpeg-static');
+  const ffmpegPath = getFfmpegPath();
 
   const model = modelId || 'Xenova/whisper-tiny';
 
@@ -153,7 +162,16 @@ async function transcribeLocal(audioBuffer, modelId) {
   // Lazy-load pipeline (cached between calls — warm-up ~3s on first call)
   if (!_localPipeline) {
     process.env.ORT_LOGGING_LEVEL = '3'; // suppress ONNX verbose warnings
-    const { pipeline } = await import('@xenova/transformers');
+    let xenovaModule;
+    try {
+      xenovaModule = await import('@xenova/transformers');
+    } catch {
+      throw new Error(
+        'Local STT tidak tersedia di platform ini (ONNX tidak terpasang).\n' +
+        'Gunakan /stt dan pilih provider openai, groq, atau hf.'
+      );
+    }
+    const { pipeline } = xenovaModule;
     _localPipeline = await pipeline('automatic-speech-recognition', model, {
       quantized: true,
     });

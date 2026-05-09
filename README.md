@@ -64,6 +64,46 @@ Override with the `BIMA_DATA` environment variable.
 
 ---
 
+## Platform Support
+
+| Platform | Status | Notes |
+|---|---|---|
+| Linux / Debian / Ubuntu | ✅ Full | `npm install -g bima-agent` |
+| macOS | ✅ Full | `npm install -g bima-agent` |
+| Windows | ✅ Full | `npm install -g bima-agent` |
+| Docker | ✅ Full | `docker-compose up` |
+| Termux (Android) | ✅ Partial | See below — semantic search & local STT unavailable |
+| Railway / Render / Fly.io | ✅ Full | Deploy via Docker image |
+
+### Linux / Debian
+
+```bash
+# Install Node.js 18+ if not already installed
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Install BIMA
+npm install -g bima-agent
+bima
+```
+
+### Termux (Android)
+
+```bash
+# 1. Install deps
+pkg update && pkg install nodejs ffmpeg
+
+# 2. Install BIMA
+npm install -g bima-agent
+
+# 3. Run
+bima
+```
+
+> **Note (Termux):** Semantic search (vector embeddings) and local Whisper STT require ONNX Runtime which may not be available on all ARM devices. All other features — WhatsApp, Telegram, AI replies, voice notes via cloud STT, knowledge base (keyword search), web search, and plugins — work normally. For voice note transcription use `/stt` and select `openai`, `groq`, or `hf` provider.
+
+---
+
 ## Docker
 
 The easiest way to run BIMA in a persistent, headless environment:

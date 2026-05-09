@@ -1,11 +1,12 @@
 'use strict';
 
-// Lazy-loaded pipeline — first call downloads model (~25MB)
 let _pipeline = null;
 let _loading  = false;
 let _waiters  = [];
+let _disabled = false; // true when ONNX unavailable (ARM/Termux fallback)
 
 async function getPipeline() {
+  if (_disabled) throw new Error('Semantic embedding tidak tersedia di platform ini (ONNX tidak didukung).');
   if (_pipeline) return _pipeline;
 
   if (_loading) {
@@ -15,7 +16,6 @@ async function getPipeline() {
   _loading = true;
   try {
     const { pipeline, env } = await import('@xenova/transformers');
-    // Cache model in ~/.bima/models/
     const os   = require('os');
     const path = require('path');
     env.cacheDir = process.env.BIMA_DATA
@@ -30,21 +30,20 @@ async function getPipeline() {
     _waiters = [];
     return _pipeline;
   } catch (e) {
-    _loading = false;
+    _loading  = false;
+    _disabled = true;
     _waiters.forEach(w => w.rej(e));
     _waiters = [];
     throw e;
   }
 }
 
-// Embed a text string → Float32Array (384-dim)
 async function embed(text) {
   const pipe   = await getPipeline();
   const output = await pipe(text.slice(0, 512), { pooling: 'mean', normalize: true });
   return Array.from(output.data);
 }
 
-// Cosine similarity between two arrays
 function cosine(a, b) {
   if (!a || !b || a.length !== b.length) return 0;
   let dot = 0, na = 0, nb = 0;
@@ -57,7 +56,7 @@ function cosine(a, b) {
   return denom === 0 ? 0 : dot / denom;
 }
 
-// Check if model is ready (no download needed)
-function isReady() { return !!_pipeline; }
+function isReady()     { return !!_pipeline && !_disabled; }
+function isAvailable() { return !_disabled; }
 
-module.exports = { embed, cosine, isReady, getPipeline };
+module.exports = { embed, cosine, isReady, isAvailable, getPipeline };

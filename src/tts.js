@@ -102,6 +102,11 @@ async function synthesizeMp3(text) {
   return Buffer.concat(buffers);
 }
 
+function _getFfmpegPath() {
+  try { const p = require('ffmpeg-static'); if (p) return p; } catch {}
+  return 'ffmpeg';
+}
+
 // Convert MP3 buffer → OGG Opus buffer (WhatsApp voice note format)
 async function mp3ToOgg(mp3Buffer) {
   const id      = `bima_tts_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -111,7 +116,7 @@ async function mp3ToOgg(mp3Buffer) {
 
   try {
     fs.writeFileSync(mp3Path, mp3Buffer);
-    const ffmpegPath = require('ffmpeg-static');
+    const ffmpegPath = _getFfmpegPath();
 
     await new Promise((resolve, reject) => {
       execFile(ffmpegPath, [
