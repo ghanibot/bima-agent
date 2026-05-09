@@ -1,1 +1,322 @@
-# 🟢 BIMA — WhatsApp AI Agent CLIAsisten AI berbahasa Indonesia yang berjalan di terminal. Tanya apa saja langsung ke Bima, dan dia akan menjawab berdasarkan knowledge base WhatsApp kamu.``` ██████╗ ██╗███╗   ███╗ █████╗  ██╔══██╗██║████╗ ████║██╔══██╗ ██████╔╝██║██╔████╔██║███████║ ██╔══██╗██║██║╚██╔╝██║██╔══██║ ██████╔╝██║██║ ╚═╝ ██║██║  ██║ ╚═════╝ ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝```\---## ⚡ Quick Start — 1 Command**Termux:**```bashunzip bima-agent.zip \\\\\\\&\\\\\\\& cd bima-v2 \\\\\\\&\\\\\\\& bash install.sh \\\\\\\&\\\\\\\& bima```**Linux/macOS:**```bashunzip bima-agent.zip \\\\\\\&\\\\\\\& cd bima-v2 \\\\\\\&\\\\\\\& bash install.sh \\\\\\\&\\\\\\\& bima```\---## 🚀 Cara Kerja### 1️⃣ Set AI Provider (`/model`)Pilih OpenAI, Anthropic, atau OpenRouter — input model \& API key.``` BIMA> /model  MODEL — Konfigurasi AI  1. OpenAI  2. Anthropic  3. OpenRouter Pilih provider (1/2/3): 1 ✓ Provider: openai Nama model (contoh: gpt-4o-mini): gpt-4o-mini API Key: sk-xxxxxxxx...  ⏳ Menguji API... ✓ Konfigurasi berhasil disimpan!```### 2️⃣ Hubung WhatsApp (`/wa`)Scan QR code yang muncul di terminal.``` BIMA> /wa  \\\\\\\[WA] Memulai koneksi WhatsApp... \\\\\\\[WA] QR code akan muncul — scan dengan WhatsApp kamu.  \\\\\\\[Scan QR dengan HP kamu]  \\\\\\\[WA] WhatsApp terhubung!```### 3️⃣ Set Grup Input (`/input`)Pilih grup mana yang jadi file collector.``` BIMA> /input  INPUT — Pilih Grup WhatsApp   1. Grup A   2. Grup B (Admin)   3. Keluarga Masukkan nomor grup: 2 ✓ Grup input diset ke: Grup B (Admin)```### 4️⃣ Set Grup Output (`/output`)Pilih grup mana yang jadi responder.``` BIMA> /output  OUTPUT — Pilih Grup WhatsApp   1. Grup A   2. Grup B (Admin)   3. Keluarga Masukkan nomor grup: 3 ✓ Grup output diset ke: Keluarga```\---## 💬 Tanya Langsung ke BimaSetelah setup, tinggal ketik pertanyaan biasa di terminal:``` BIMA> berapa total anggota di perusahaan?  Bima sedang berpikir...  ──────────────────────────────────────────────────── Bima ────────────────────────────────────────────────────  Total anggota di perusahaan ada 45 orang, dibagi ke  3 departemen: engineering (15), marketing (18),  operations (12). ──────────────────────────────────────────────────── BIMA> \\\\\\\_```\---## 📋 Daftar Perintah|Perintah|Fungsi||-|-||`/help`|Tampilkan daftar perintah||`/status`|Status koneksi \& konfigurasi||`/model`|Set AI provider \& API key||`/wa`|Hubung WhatsApp (scan QR)||`/input`|Set grup input (file collector)||`/output`|Set grup output (responder)||`/knowledge`|Lihat dokumen tersimpan||`/compact`|Kompres konteks dokumen (hemat token)||`/clear`|Bersihkan layar||`/exit`|Keluar|\---## 🗂️ Cara Kerja WhatsApp### INPUT GROUP (File Collector)* Bima **mendengarkan** grup ini secara diam-diam* Setiap ada file (PDF, Excel, Word, TXT) → **otomatis disimpan*** Isi file di-extract dan di-structure pakai AI* Tidak ada balasan pesan**Contoh:** Upload laporan.pdf ke Grup A → Bima simpan otomatis### OUTPUT GROUP (AI Responder)* Bima **hanya menjawab jika di-mention** (@bima)* Cari konteks dari knowledge base* Generate jawaban based on data yang tersimpan* Balas di grup tersebut**Contoh:**```User: @bima ada berapa dokumen yang tersimpan?Bima: Ada 5 dokumen: laporan.pdf, data.xlsx, ...```\---## 🧠 Knowledge Base### `/knowledge` — Lihat Dokumen``` BIMA> /knowledge  ──────────────────────────────────────────────────── KNOWLEDGE — 3 dokumen ────────────────────────────────────────────────────   1. laporan\\\\\\\_1715000000.pdf      2024-05-06 · 245 KB teks   2. data\\\\\\\_1715000100.xlsx      2024-05-06 · 128 KB teks   3. struktur\\\\\\\_1715000200.pdf      2024-05-06 · 512 KB teks \\\\\\\[compact] ────────────────────────────────────────────────────```### `/compact` — Kompresi KonteksHemat token dengan meringkas dokumen:``` BIMA> /compact  ──────────────────────────────────────────────────── COMPACT — Kompresi Konteks ────────────────────────────────────────────────────   1. Semua dokumen   2. Pilih dokumen tertentu ────────────────────────────────────────────────────  Pilih mode (1/2): 2   1. laporan.pdf   2. data.xlsx   3. struktur.pdf  Nomor dokumen (pisah koma, misal: 1,3): 1,3    → laporan.pdf ... ✓ selesai   → struktur.pdf ... ✓ selesai ✓ Selesai. Konteks lebih efisien!```\---## 🔐 Security* **API Key** tidak pernah di-print penuh — hanya `sk-••••abcd`* **Session WhatsApp** disimpan di `\\\\\\\~/.../data/auth/`* **Knowledge base** disimpan JSON biasa — bisa di-backup\---## 🛠️ Troubleshooting### "Baileys tidak ditemukan"```bashcd \\\\\\\~/bima-agentnpm install```### "Node.js v18+ diperlukan"Update Node.js atau gunakan `nvm`:```bashnvm install 18```### WhatsApp "waiting for this message"* Ini **sudah fixed** dengan Baileys latest + QR di terminal* Jika masih error, cek koneksi internet* Logout WA di HP lain dan reconnect via QR baru### Command `bima` tidak ditemukan```bash# Cek pathwhich bima# Atau jalankan manualnode \\\\\\\~/bima-agent/src/cli.js```\---## 📦 File Structure```bima-agent/├── src/│   ├── cli.js          # Main CLI interface│   ├── config.js       # Config manager│   ├── ai.js           # AI provider (OpenAI/Anthropic/OpenRouter)│   ├── whatsapp.js     # Baileys WhatsApp handler│   ├── processor.js    # File processing (PDF/Excel/Word)│   └── db.js           # Knowledge base manager├── bin/│   └── bima            # Executable├── data/│   ├── config.json     # Config (provider, API key, grup)│   ├── db.json         # Knowledge base│   ├── auth/           # WhatsApp session│   └── files/          # Downloaded files├── package.json├── install.sh└── README.md```\---## 🚀 Fitur✅ **CLI Interface** — Prompt interaktif di terminal  ✅ **QR Code WhatsApp** — Scan langsung dari terminal  ✅ **Multi AI Provider** — OpenAI, Anthropic, OpenRouter  ✅ **File Processing** — PDF, Excel, Word automatic extraction  ✅ **Knowledge Base** — JSON based, searchable  ✅ **Context Compression** — `/compact` untuk hemat token  ✅ **Retry Logic** — Auto-retry pesan yang gagal  ✅ **Terminal-First** — No GUI, pure CLI\---## 📝 LisensiMIT — Bebas dipakai dan dimodifikasi.\---## 🎯 Tips* **Pertama kali:** Pastikan grup input \& output berbeda* **Backup:** Copy `\\\\\\\~/bima-agent/data/` untuk backup knowledge* **Update:** Tinggal `git pull` atau re-extract zip baru* **Offline:** Bima bisa jawab soal knowledge yang udah tersimpan (tanpa API)\---**Selamat menggunakan Bima! 🚀**Ada pertanyaan? Ketik `/help` di Bima.
+```
+  ██████╗ ██╗███╗   ███╗ █████╗
+  ██╔══██╗██║████╗ ████║██╔══██╗
+  ██████╔╝██║██╔████╔██║███████║
+  ██╔══██╗██║██║╚██╔╝██║██╔══██║
+  ██████╔╝██║██║ ╚═╝ ██║██║  ██║
+  ╚═════╝ ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝
+```
+
+# BIMA — WhatsApp AI Agent for Indonesia
+
+> AI assistant berbahasa Indonesia yang berjalan di terminal — multi-tenant, plugin system, REST API, Web Admin, Telegram, dan support 100+ model AI.
+
+![Node.js >=18](https://img.shields.io/badge/node-%3E%3D18-brightgreen?logo=node.js)
+![License MIT](https://img.shields.io/badge/license-MIT-blue)
+![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)
+
+---
+
+## Fitur
+
+- 🤖 **AI-powered replies** — 11 provider: OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek, Together AI, OpenRouter, Ollama, LM Studio, dan OpenAI-compatible endpoint
+- 🖥️ **Interactive TUI** — arrow-key menus, number hotkeys, ESC cancel
+- 👥 **Multi-tenant** — kelola banyak akun WhatsApp dari satu instalasi
+- 🧩 **Plugin system** — drop `.js` ke `~/.bima/plugins/` untuk tambah command dan tool AI
+- 📚 **Knowledge base** — index PDF, Word, Excel; agent ambil konteks otomatis
+- 🔍 **Semantic search** — local vector embeddings via `@xenova/transformers`
+- 🎙️ **Voice note STT** — transkripsi audio masuk via Whisper (ffmpeg-powered)
+- 💬 **Group awareness** — pilih grup mana yang didengar dan dibalas
+- 🧠 **Long-term memory** — ingat preferensi user antar sesi
+- ⏰ **Reminders** — jadwal pesan dikirim di waktu tertentu
+- 🌐 **Web search** — DuckDuckGo + Brave Search, auto-browse hasil
+- 💸 **Realtime prices** — crypto (CoinGecko) dan saham (Yahoo Finance)
+- 🔬 **Deep research** — multi-source web research dengan AI sub-queries
+- 🔊 **Voice notes (TTS)** — `/voice` untuk balas pesan sebagai voice note
+- 📊 **Prediction markets** — Polymarket real-time via `/polymarket`
+- 👁️ **Topic watcher** — `/watch` monitor topik, kirim alert ke grup
+- 👤 **Member profiles** — lacak history interaksi member grup via `/profiles`
+- 👁‍🗨 **Vision AI** — kirim foto ke WhatsApp/Telegram, BIMA analisis (GPT-4o, Claude, Gemini)
+- 💬 **Telegram support** — jalankan BIMA di Telegram sekaligus WhatsApp
+- 📣 **Cross-group mention tracking** — lacak siapa di-tag dari semua grup, query via DM
+- 🌐 **REST API** — HTTP endpoint untuk kirim pesan, query agent, kelola KB dari luar
+- 🖥️ **Web Admin Panel** — browser UI untuk send pesan, lihat log, kelola KB
+- 📱 **Termux (Android)** — jalan di HP Android via Termux
+
+---
+
+## Quick Start
+
+```bash
+# 1. Install global
+npm install -g bima-agent
+
+# 2. Jalankan
+bima
+
+# 3. Setup wizard
+#    → /model  — pilih AI provider & masukkan API key
+#    → /wa     — scan QR code dengan WhatsApp
+#    → /input  — pilih grup yang didengar
+#    → /output — pilih grup tempat Bima membalas
+```
+
+Data (auth session, knowledge base, plugins) disimpan di `~/.bima/`.
+Override dengan env var `BIMA_DATA`.
+
+---
+
+## Platform Support
+
+| Platform | Status | Catatan |
+|---|---|---|
+| Linux / Debian / Ubuntu | ✅ Full | `npm install -g bima-agent` |
+| macOS | ✅ Full | `npm install -g bima-agent` |
+| Windows | ✅ Full | `npm install -g bima-agent` |
+| Docker | ✅ Full | `docker-compose up` |
+| Termux (Android) | ✅ Partial | Lihat bagian Termux di bawah |
+| Railway / Render / Fly.io | ✅ Full | Deploy via Docker image |
+
+### Linux / Debian
+
+```bash
+# Install Node.js 20+
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+npm install -g bima-agent
+bima
+```
+
+### Termux (Android)
+
+```bash
+pkg update && pkg install nodejs ffmpeg
+npm install -g bima-agent
+bima
+```
+
+> **Catatan Termux:** Semantic search (vector embeddings) dan local Whisper STT membutuhkan ONNX Runtime yang mungkin tidak tersedia di semua perangkat ARM. Semua fitur lain — WhatsApp, Telegram, AI replies, voice note via cloud STT, knowledge base (keyword search), web search — berjalan normal. Untuk STT gunakan `/stt` dan pilih `openai`, `groq`, atau `hf`.
+
+---
+
+## Docker
+
+```bash
+# Start (butuh terminal interaktif untuk QR scan pertama kali)
+docker-compose up
+
+# Setelah scan QR, jalankan headless
+docker-compose up -d
+```
+
+Session dan data disimpan di `./bima-data/` di host. Container auto-restart kecuali dihentikan manual.
+
+### Manual Docker
+
+```bash
+docker build -t bima-agent .
+docker run -it --rm \
+  -v "$(pwd)/bima-data:/data" \
+  -e BIMA_DATA=/data \
+  bima-agent
+```
+
+---
+
+## Telegram
+
+Jalankan BIMA di Telegram sekaligus (atau sebagai pengganti) WhatsApp — AI, KB, dan memory yang sama.
+
+```bash
+# 1. Dapatkan token dari @BotFather di Telegram
+#    → /newbot → pilih nama → copy token
+
+# 2. Di terminal BIMA:
+/tg token 123456789:ABCdefGHI...   # simpan token
+/tg start                           # aktifkan bot
+```
+
+Bot menerima: teks, foto (vision AI), voice note (STT), file (PDF/Excel/Word → KB).
+
+---
+
+## REST API
+
+BIMA menyediakan REST API HTTP untuk integrasi eksternal (n8n, Zapier, custom app).
+
+```bash
+# Aktifkan API (simpan otomatis, auto-start sesi berikutnya)
+/api start 3000
+
+# Set API key (opsional, untuk keamanan)
+/api key rahasia123
+
+# Status
+/api status
+
+# Hentikan
+/api stop
+```
+
+### Endpoints
+
+| Method | Route | Deskripsi |
+|---|---|---|
+| `GET` | `/` | Web Admin Panel |
+| `GET` | `/api/status` | Status WA, TG, model, tenant |
+| `GET` | `/api/groups` | Daftar grup dikonfigurasi |
+| `POST` | `/api/send` | Kirim pesan WA `{"jid":"...","text":"..."}` |
+| `POST` | `/api/query` | Tanya agent AI `{"question":"..."}` |
+| `GET` | `/api/knowledge` | List dokumen KB |
+| `DELETE` | `/api/knowledge/:hash` | Hapus dokumen KB |
+| `GET` | `/api/log?groupJid=xxx&hours=24` | Log percakapan grup |
+| `GET` | `/api/ltm` | Long-term memory entries |
+
+Auth via header `X-API-Key: <key>` atau query `?key=<key>`.
+
+### Contoh
+
+```bash
+# Kirim pesan
+curl -X POST http://localhost:3000/api/send \
+  -H "X-API-Key: rahasia123" \
+  -H "Content-Type: application/json" \
+  -d '{"jid":"6281234567890@s.whatsapp.net","text":"Halo dari API!"}'
+
+# Kirim ke nomor HP
+curl -X POST http://localhost:3000/api/send \
+  -H "X-API-Key: rahasia123" \
+  -d '{"phone":"081234567890","text":"Halo!"}'
+
+# Tanya agent
+curl -X POST http://localhost:3000/api/query \
+  -H "X-API-Key: rahasia123" \
+  -d '{"question":"Siapa yang tag saya hari ini?"}'
+```
+
+---
+
+## Web Admin Panel
+
+Buka browser ke `http://localhost:3000/` setelah `/api start`.
+
+- **Dashboard** — status WA, TG, model, tenant, daftar grup
+- **Send** — kirim pesan ke grup atau nomor HP, tanya AI agent
+- **Knowledge Base** — lihat dan hapus dokumen
+- **Log** — lihat percakapan grup per periode
+
+API key bisa diinput langsung di panel, disimpan di localStorage browser.
+
+---
+
+## Commands
+
+| Command | Deskripsi |
+|---|---|
+| `/help` | Tampilkan daftar perintah |
+| `/wa` | Hubungkan WhatsApp (scan QR) |
+| `/status` | Status koneksi & konfigurasi |
+| `/model` | Set AI provider, model, dan API key |
+| `/input` | Pilih grup WhatsApp sebagai input |
+| `/output` | Pilih grup WhatsApp sebagai output |
+| `/api` | REST API + Web Admin (start/stop/key/status) |
+| `/knowledge` | Lihat dokumen tersimpan |
+| `/compact` | Kompres konteks dokumen (hemat token) |
+| `/stt` | Konfigurasi Speech-to-Text |
+| `/tts` | Konfigurasi Text-to-Speech |
+| `/reminder` | Lihat pengingat aktif |
+| `/memory` | Reset memori percakapan semua user |
+| `/ltm` | Lihat / hapus long-term memory |
+| `/search <query>` | Cari di web dari terminal |
+| `/polymarket [query]` | Cari Polymarket prediction markets |
+| `/tg` | Kelola Telegram bot (token/start/stop/status) |
+| `/watch` | Monitor topik, kirim notif ke grup |
+| `/profiles` | Lihat profil member grup |
+| `/tenant` | Kelola tenant (list/add/switch/del) |
+| `/skill` | Kelola plugin (list/add/remove/info) |
+| `/logout` | Logout WhatsApp & hapus session |
+| `/clear` | Bersihkan layar |
+| `/exit` | Keluar dari BIMA |
+
+---
+
+## Configuration
+
+```
+~/.bima/
+├── auth/           # Baileys WhatsApp session
+├── plugins/        # Custom plugins (.js files)
+├── config.json     # Provider, model, API key, grup, apiPort
+├── db.json         # Knowledge base index
+└── ltm.json        # Long-term memory
+```
+
+---
+
+## Plugin Development
+
+Drop file `.js` ke `~/.bima/plugins/`:
+
+```js
+// ~/.bima/plugins/my-plugin.js
+module.exports = {
+  name: 'my-plugin',
+  description: 'Contoh plugin custom',
+
+  commands: {
+    '/greet': async (args, ctx) => {
+      ctx.log('INFO', `Halo, ${args || 'dunia'}!`);
+    },
+  },
+
+  tools: [
+    {
+      name: 'get_weather',
+      description: 'Ambil cuaca saat ini untuk sebuah kota',
+      async execute(input, tenantId) {
+        return `Cuaca di ${input}: cerah 32°C`;
+      },
+    },
+  ],
+};
+```
+
+`ctx` exposes: `ctx.log(type, msg)`, `ctx.config`.
+
+---
+
+## AI Providers
+
+| Provider | Contoh Model | API Key |
+|---|---|---|
+| **OpenRouter** | `meta-llama/llama-3.1-8b-instruct:free`, 100+ model | Ya — [openrouter.ai/keys](https://openrouter.ai/keys) |
+| **OpenAI** | `gpt-4o-mini`, `gpt-4o` | Ya |
+| **Anthropic** | `claude-3-haiku-20240307`, `claude-3-5-sonnet-20241022` | Ya |
+| **Google Gemini** | `gemini-1.5-flash`, `gemini-1.5-pro` | Ya |
+| **Groq** | `llama-3.1-8b-instant`, `mixtral-8x7b-32768` | Ya (free tier ada) |
+| **Mistral AI** | `mistral-small-latest` | Ya |
+| **DeepSeek** | `deepseek-chat`, `deepseek-coder` | Ya |
+| **Together AI** | `meta-llama/Llama-3-8b-chat-hf` | Ya |
+| **Ollama** (lokal) | `llama3`, `mistral`, dll | Tidak |
+| **LM Studio** (lokal) | model apapun yang di-load | Tidak |
+| **OpenAI-compatible** | custom endpoint | Opsional |
+
+> **Gratis:** OpenRouter banyak model free-tier. Groq gratis dengan rate limit. Ollama dan LM Studio jalan sepenuhnya di mesin lokal.
+
+---
+
+## Contributing
+
+1. Fork repo dan buat feature branch
+2. Buat perubahan — PR fokus pada satu fitur
+3. Smoke test: `node src/cli.js` dan verifikasi command yang diubah
+4. Buka pull request dengan deskripsi perubahan
+
+Bug report: sertakan versi Node.js, OS, dan output error lengkap.
+
+---
+
+## License
+
+MIT © 2026 BIMA Contributors
