@@ -34,8 +34,10 @@ TOOLS TERSEDIA:
 11. update_kb(hash,field,val) - Update field di dokumen KB
 12. get_group_log(hours)      - Ambil log percakapan grup N jam terakhir
 13. get_person_location(name) - Cari lokasi terakhir seseorang dari log grup
-14. get_polymarket(query)     - Cari pasar prediksi di Polymarket (trending/topik tertentu)
-15. final_answer(text)        - Kirim jawaban akhir ke user
+14. get_polymarket(query)          - Cari pasar prediksi di Polymarket (trending/topik tertentu)
+15. get_my_mentions(hours)         - Siapa yang men-tag/mention user ini di semua grup (N jam terakhir, default 24)
+16. get_conversation_patterns(hours) - Pola percakapan di grup: siapa ngobrol dengan siapa
+17. final_answer(text)             - Kirim jawaban akhir ke user
 
 FORMAT RESPONS - balas HANYA JSON valid, tidak ada teks lain:
 {"thought":"pikirku singkat","action":"nama_tool","input":"parameter"}
@@ -56,7 +58,9 @@ ATURAN TOOL — PRIORITAS WAJIB:
 4. Topik kompleks/analitis → deep_research
 5. User kirim link → browse_url
 6. Prediksi pasar / probabilitas event → get_polymarket
-7. Percakapan biasa/math → langsung final_answer (tidak perlu search)
+7. "Siapa yang tag/sebut/mention/panggil saya?" → get_my_mentions(jam) — WAJIB pakai ini, jangan coba jawab dari memori
+8. "Siapa ngobrol sama siapa / pola percakapan grup" → get_conversation_patterns(jam)
+9. Percakapan biasa/math → langsung final_answer (tidak perlu search)
 
 ATURAN JAWABAN — WAJIB:
 - Setiap jawaban HARUS ditutup dengan 1-2 saran, alternatif, atau langkah lanjutan yang relevan.
@@ -69,11 +73,11 @@ ATURAN JAWABAN — WAJIB:
 }
 
 // Search-type tools — trigger "sedang mencari" indicator
-const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket']);
+const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket', 'get_my_mentions', 'get_conversation_patterns']);
 
 // ── Main agent loop ───────────────────────────────────────────
 // onToolCall(action, input) — optional async callback before each tool executes
-async function runAgent(question, history, cfg, ltmContext, onToolCall, tenantId, groupJid) {
+async function runAgent(question, history, cfg, ltmContext, onToolCall, tenantId, groupJid, senderJid) {
   const { callAI }    = require('./ai');
   const { searchKnowledge, getKnowledge, updateDocument, getDocument, searchAllFiles } = require('./db');
   const { webSearch, browseUrl, deepResearch, getPrice } = require('./search');
@@ -189,7 +193,7 @@ async function runAgent(question, history, cfg, ltmContext, onToolCall, tenantId
         observation = await executeTool(step.action, step.input, {
           searchKnowledge, getKnowledge, webSearch, browseUrl, deepResearch, getPrice,
           updateDocument, getDocument, searchAllFiles, remember, recall,
-          cfg, groupJid,
+          cfg, groupJid, senderJid,
         }, tid);
       }
     } catch (e) {
@@ -340,6 +344,35 @@ async function executeTool(action, input, tools, tenantId) {
       const { searchMarkets, getTrendingMarkets } = require('./polymarket');
       const q = String(input || '').trim();
       return q ? await searchMarkets(q) : await getTrendingMarkets();
+    }
+
+    case 'get_my_mentions': {
+      const { getMentions, formatMentions } = require('./grouplog');
+      const targetJid = tools.senderJid;
+      if (!targetJid) return 'Tidak bisa mendeteksi JID pengirim untuk mencari mention.';
+      const hours    = parseInt(input) || 24;
+      const mentions = getMentions(tid, targetJid, hours);
+      if (!mentions.length) return `Tidak ada yang men-tag kamu dalam ${hours} jam terakhir.`;
+      const phone    = targetJid.split('@')[0].split(':')[0];
+      const formatted = formatMentions(mentions, phone);
+      return formatted || 'Tidak ada mention ditemukan.';
+    }
+
+    case 'get_conversation_patterns': {
+      const { getConversationPatterns } = require('./grouplog');
+      if (!tools.groupJid) return 'Tool ini membutuhkan konteks grup.';
+      const hours    = parseInt(input) || 24;
+      const patterns = getConversationPatterns(tid, tools.groupJid, hours);
+      if (!patterns) return `Tidak ada percakapan dalam ${hours} jam terakhir.`;
+
+      let out = `*Pola percakapan ${hours}j terakhir (${patterns.totalMessages} pesan):*\n\n`;
+      if (patterns.topActive.length) {
+        out += `*Paling aktif:*\n${patterns.topActive.map(x => `• ${x}`).join('\n')}\n\n`;
+      }
+      if (patterns.topPairs.length) {
+        out += `*Sering berinteraksi:*\n${patterns.topPairs.map(x => `• ${x}`).join('\n')}`;
+      }
+      return out;
     }
 
     default:

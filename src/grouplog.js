@@ -3,8 +3,8 @@
 const fs   = require('fs');
 const path = require('path');
 
-const MAX_AGE_MS  = 24 * 60 * 60 * 1000;
-const MAX_ENTRIES = 2000;
+const MAX_AGE_MS  = 48 * 60 * 60 * 1000; // keep 48h so "tadi pagi" still queryable
+const MAX_ENTRIES = 3000;
 
 function logPath(tenantId, groupJid) {
   const { tenantPaths } = require('./tenant');
@@ -81,4 +81,127 @@ function getPersonLocation(tenantId, groupJid, nameOrPhone) {
   return locEntries[locEntries.length - 1]; // most recent
 }
 
-module.exports = { logMsg, getLog, formatLog, summarize, getPersonLocation };
+// ── List all group JIDs logged for a tenant ───────────────────
+function listGroupJids(tenantId) {
+  const { tenantPaths } = require('./tenant');
+  const dir = tenantPaths(tenantId || 'default').dir;
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => f.startsWith('grouplog_') && f.endsWith('.json'))
+    .map(f => {
+      // Reverse the safe-encode: grouplog_1234567890_g_us.json → 1234567890@g.us
+      const inner = f.replace(/^grouplog_/, '').replace(/\.json$/, '');
+      // Try to reconstruct JID — replace last _g_us with @g.us
+      return inner.replace(/_g_us$/, '@g.us').replace(/_c_us$/, '@c.us');
+    });
+}
+
+// ── Get all mentions of a JID across all groups ───────────────
+// Returns array of { ts, groupJid, groupName?, senderJid, senderName, senderPhone, text, mentionedJids }
+function getMentions(tenantId, targetJid, hours = 24) {
+  const phone  = targetJid.split('@')[0].split(':')[0];
+  const cutoff = Date.now() - hours * 3_600_000;
+  const results = [];
+
+  const { tenantPaths } = require('./tenant');
+  const dir = tenantPaths(tenantId || 'default').dir;
+  if (!fs.existsSync(dir)) return results;
+
+  const files = fs.readdirSync(dir).filter(f => f.startsWith('grouplog_') && f.endsWith('.json'));
+
+  for (const file of files) {
+    const rawJid = file.replace(/^grouplog_/, '').replace(/\.json$/, '');
+    const groupJid = rawJid.replace(/_g_us$/, '@g.us').replace(/_c_us$/, '@c.us');
+
+    let entries;
+    try { entries = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')); }
+    catch { continue; }
+
+    for (const e of entries) {
+      if (e.ts < cutoff) continue;
+      if (!Array.isArray(e.mentionedJids) || !e.mentionedJids.length) continue;
+
+      const wasMentioned = e.mentionedJids.some(mjid => {
+        const mPhone = mjid.split('@')[0].split(':')[0];
+        return mPhone === phone || mjid === targetJid;
+      });
+      if (!wasMentioned) continue;
+
+      results.push({
+        ts:          e.ts,
+        groupJid,
+        senderJid:   e.senderJid || '',
+        senderName:  e.senderName || '?',
+        senderPhone: (e.senderJid || '').split('@')[0].split(':')[0],
+        text:        e.text || '',
+        quotedText:  e.quotedText || '',
+      });
+    }
+  }
+
+  return results.sort((a, b) => a.ts - b.ts);
+}
+
+// ── Format mentions for WhatsApp reply ────────────────────────
+function formatMentions(mentions, targetName) {
+  if (!mentions.length) return null;
+
+  const lines = mentions.map((m, i) => {
+    const t     = new Date(m.ts).toLocaleString('id-ID', {
+      weekday: 'short', hour: '2-digit', minute: '2-digit',
+    });
+    const group = m.groupJid.split('@')[0];
+    const phone = m.senderPhone ? `0${m.senderPhone.replace(/^62/, '')}` : '?';
+    return (
+      `${i + 1}. *${m.senderName}* (${phone})\n` +
+      `   Grup: ${group}\n` +
+      `   Waktu: ${t}\n` +
+      `   Pesan: "${m.text.slice(0, 120)}"`
+    );
+  });
+
+  return `📣 *Tag untuk ${targetName || 'kamu'} (${mentions.length}x):*\n\n${lines.join('\n\n')}`;
+}
+
+// ── Conversation pattern analysis (who talks to whom) ─────────
+function getConversationPatterns(tenantId, groupJid, hours = 24) {
+  const entries = getLog(tenantId, groupJid, hours);
+  if (!entries.length) return null;
+
+  const pairs  = {};   // "A→B": count
+  const active = {};   // name: messageCount
+
+  for (const e of entries) {
+    const from = e.senderName || '?';
+    active[from] = (active[from] || 0) + 1;
+
+    if (e.quotedSenderName) {
+      const key = `${from}→${e.quotedSenderName}`;
+      pairs[key] = (pairs[key] || 0) + 1;
+    }
+    if (Array.isArray(e.mentionedNames)) {
+      for (const to of e.mentionedNames) {
+        const key = `${from}→${to}`;
+        pairs[key] = (pairs[key] || 0) + 1;
+      }
+    }
+  }
+
+  const topPairs = Object.entries(pairs)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([k, v]) => `${k} (${v}x)`);
+
+  const topActive = Object.entries(active)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([n, c]) => `${n}: ${c} pesan`);
+
+  return { topPairs, topActive, totalMessages: entries.length };
+}
+
+module.exports = {
+  logMsg, getLog, formatLog, summarize,
+  getPersonLocation, getMentions, formatMentions,
+  listGroupJids, getConversationPatterns,
+};

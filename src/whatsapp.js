@@ -385,11 +385,22 @@ async function handleMsg(msg) {
   // ── Log ALL group messages (24h rolling) ─────────────────
   try {
     const { logMsg: logGroupMsg } = require('./grouplog');
+
+    // Build mention names from the group participant list
+    const mentionedNames = mentioned.map(mjid => {
+      const grpInfo  = state.groups.find(g => g.id === jid);
+      const phone    = mjid.split('@')[0].split(':')[0];
+      // Try to find a cached name — fall back to phone number
+      return phone;
+    });
+
     logGroupMsg(tenantId, jid, {
-      senderJid: sender,
-      senderName: msg.pushName || sender.split('@')[0].split(':')[0],
-      text:       text || (locMsg ? '[Kirim lokasi]' : '[Media]'),
-      type:       locMsg ? 'location' : (text ? 'text' : 'media'),
+      senderJid:     sender,
+      senderName:    msg.pushName || sender.split('@')[0].split(':')[0],
+      text:          text || (locMsg ? '[Kirim lokasi]' : '[Media]'),
+      type:          locMsg ? 'location' : (text ? 'text' : 'media'),
+      groupName:     state.groups.find(g => g.id === jid)?.name || jid.split('@')[0],
+      ...(mentioned.length ? { mentionedJids: mentioned, mentionedNames } : {}),
       ...(quotedSenderJid ? {
         quotedSenderJid,
         quotedSenderName: contextInfo.pushName || quotedSenderJid.split('@')[0].split(':')[0],
@@ -789,7 +800,7 @@ async function handleQuery(msg, jid, text, cfg, senderJid, tenantId) {
       }
     };
 
-    const { answer, steps } = await runAgent(agentQuestion, history, cfg, ltmContext.length ? ltmContext : null, onToolCall, tid, jid);
+    const { answer, steps } = await runAgent(agentQuestion, history, cfg, ltmContext.length ? ltmContext : null, onToolCall, tid, jid, senderJid);
 
     if (steps.length) {
       logFn('AGENT', `[${tid}] ${steps.length} step(s): ${steps.map(s => s.action).join(' -> ')}`);
