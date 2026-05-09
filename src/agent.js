@@ -15,17 +15,16 @@ function buildSystemPrompt(cfg) {
   const { langInstruction } = require('./languages');
   const langSuffix = cfg?.language ? langInstruction(cfg.language) : '';
 
-  return `Kamu adalah Bima, WhatsApp AI Agent dari Indonesia yang cerdas dan adaptif.${langSuffix}
+  return `Kamu adalah Bima, WhatsApp AI Agent dari Indonesia yang cerdas, adaptif, dan selalu membantu.${langSuffix}
 
 ⚠️ KONTEKS WAKTU: Sekarang ${now} WIB.
 ⚠️ KNOWLEDGE CUTOFF: Training-mu berakhir awal 2024 — data setelah itu TIDAK kamu ketahui.
-⚠️ WAJIB SEARCH untuk: siapa pemimpin/presiden/menteri/pejabat sekarang, harga apapun, berita terkini, hasil pemilu, siapa CEO perusahaan, versi terbaru software, rekor terbaru, dan SEMUA fakta yang bisa berubah setelah 2024. JANGAN jawab dari memori untuk ini — selalu cek dulu.
 
 TOOLS TERSEDIA:
-1.  search_kb(query)          - Cari di knowledge base internal
+1.  search_kb(query)          - Cari di knowledge base internal (dokumen, harga, data bisnis)
 2.  get_file(filename)        - Ambil isi lengkap file tertentu dari KB
 3.  compare_files(query)      - Bandingkan data dari beberapa file sekaligus
-4.  get_price(asset)          - Harga realtime crypto/saham via API — WAJIB untuk semua harga aset
+4.  get_price(asset)          - Harga realtime crypto/saham via API
 5.  web_search(query)         - Cari info terkini di internet (DDG + baca halaman)
 6.  browse_url(url)           - Buka & baca konten halaman web tertentu
 7.  deep_research(topic)      - Riset mendalam multi-sumber untuk topik kompleks
@@ -49,14 +48,23 @@ FORMAT DATA (WhatsApp):
 - List pakai nomor atau bullet
 - Label penting pakai *bold*
 
-ATURAN TOOL:
-- Harga crypto/saham → get_price (bukan web_search)
-- Fakta kini (pemimpin, pejabat, CEO, rekor, hasil event) → web_search DULU, baru jawab
-- Topik kompleks/analitis → deep_research
-- User kirim link → browse_url
-- Data internal → search_kb
-- Prediksi pasar / probabilitas event → get_polymarket
-- Percakapan biasa/math → langsung final_answer (tidak perlu search)
+ATURAN TOOL — PRIORITAS WAJIB:
+1. Data operasional/bisnis/internal (ongkos, harga jasa, jadwal, tarif, SOP, laporan) → search_kb DULU. JANGAN web_search untuk data internal.
+   - Jika search_kb kosong → jawab: "Data [X] belum ada di knowledge base. Silakan minta admin upload file datanya."
+2. Harga crypto/saham → get_price (bukan web_search)
+3. Fakta dunia terkini (pemimpin, pejabat, CEO, berita, hasil pemilu, rekor) → web_search DULU, baru jawab
+4. Topik kompleks/analitis → deep_research
+5. User kirim link → browse_url
+6. Prediksi pasar / probabilitas event → get_polymarket
+7. Percakapan biasa/math → langsung final_answer (tidak perlu search)
+
+ATURAN JAWABAN — WAJIB:
+- Setiap jawaban HARUS ditutup dengan 1-2 saran, alternatif, atau langkah lanjutan yang relevan.
+- Format saran: "💡 *Saran:* ..." atau "📌 *Alternatif:* ..."
+- Contoh: setelah jawab harga, sarankan cara nego / waktu terbaik beli.
+- Contoh: setelah jawab info operasional, sarankan efisiensi atau pilihan lain.
+- Jika user tanya yang tidak ada di KB → sarankan data apa yang perlu di-upload.
+- Jangan tutup jawaban tanpa saran kecuali pertanyaan trivial (salam, terima kasih).
 `;
 }
 
@@ -90,15 +98,18 @@ async function runAgent(question, history, cfg, ltmContext, onToolCall, tenantId
   const maxSteps = RESEARCH_RE.test(question) ? MAX_STEPS : MAX_STEPS_SIMPLE;
 
   // ── Forced pre-search for current-fact questions ──────────────
-  // If question is about current state of world (leaders, prices, events)
-  // inject a web_search result BEFORE first AI call so AI can't skip it
-  const CURRENT_FACT_RE = /\b(sekarang|saat ini|terkini|terbaru|hari ini|siapa (presiden|pm|perdana menteri|menteri|gubernur|walikota|kepala|ceo|bos|pemimpin|direktur|ketua)|siapa yang (memimpin|menjabat|menjadi)|presiden (indonesia|amerika|rusia|china|prancis)|harga (btc|eth|bitcoin|emas|dolar|minyak)|berapa (harga|kurs|nilai)|hasil (pemilu|pilpres|pilkada)|yang terpilih|yang menang)\b/i;
+  // Only trigger for clear world-fact questions, NOT internal/operational data.
+  // Operational keywords that must NOT trigger web pre-search:
+  const INTERNAL_RE = /\b(ongkos|tarif|harga\s*(jasa|kirim|angkut|sewa|kapal|cargo|kontainer)|biaya\s*(operasional|kirim|angkut)|jadwal\s*(kapal|armada|pengiriman)|rute\s*(kapal|pelabuhan)|manifest|muatan|tonase|sop|prosedur|stok|inventory|karyawan|gaji|laporan|omzet|penjualan|order|invoice|klien|pelanggan)\b/i;
+
+  const CURRENT_FACT_RE = /\b(siapa (presiden|pm|perdana menteri|menteri|gubernur|walikota|ceo|direktur\s*utama) (indonesia|amerika|rusia|china|prancis|\w+)|presiden (indonesia|amerika|rusia|china|prancis)|harga (btc|eth|bitcoin|emas|dolar|minyak\s*dunia)|berapa (kurs|nilai) (dolar|euro|yen|usd)|hasil (pemilu|pilpres|pilkada)|yang terpilih|yang menang (pilpres|pilkada|pemilu))\b/i;
 
   const steps = [];
   let finalAnswer = null;
 
   // Pre-search: inject result as first observation so AI is grounded
-  if (CURRENT_FACT_RE.test(question) && steps.length === 0) {
+  // Skip if question is about internal/operational data (should use KB instead)
+  if (CURRENT_FACT_RE.test(question) && !INTERNAL_RE.test(question) && steps.length === 0) {
     try {
       if (onToolCall) await onToolCall('web_search', question).catch(() => {});
       const preResult = await webSearch(question);
@@ -198,21 +209,29 @@ async function runAgent(question, history, cfg, ltmContext, onToolCall, tenantId
 function sanitizeAnswer(text) {
   if (!text || typeof text !== 'string') return String(text || '');
 
+  const AGENT_KEYS = /"(thought|action|input|observation)"\s*:/;
+
   let out = text
     // Remove code fences
     .replace(/```[\w]*\n?/g, '').replace(/```/g, '')
-    // Remove full JSON agent turns like {"thought":...,"action":...}
-    .replace(/\{\s*"thought"\s*:[\s\S]*?"action"\s*:[\s\S]*?\}/g, '')
-    // Remove observation prefixes that leaked
+    // Remove agent JSON turns — greedy multi-line sweep for {"thought":...}
+    .replace(/\{\s*"thought"\s*:[\s\S]*?"action"\s*:[\s\S]*?"input"\s*:[\s\S]*?\}/g, '')
+    .replace(/\{\s*"thought"\s*:[\s\S]*?"action"\s*:[^}]*\}/g, '')
+    // Remove Observation: lines
     .replace(/^Observation:\s*/gim, '')
-    // Remove lines that are pure JSON (start with { or [)
+    // Remove "Thought:" / "Action:" prefixes that some models emit
+    .replace(/^(Thought|Action|Input)\s*:\s*/gim, '')
+    // Line-by-line filter
     .split('\n')
     .filter(line => {
       const t = line.trim();
-      if (!t) return true; // keep blank lines (paragraph breaks)
-      // Drop lines that are clearly JSON artifacts
-      if (/^\{.*\}$/.test(t) && t.includes('"action"')) return false;
-      if (/^\{.*\}$/.test(t) && t.includes('"thought"')) return false;
+      if (!t) return true;
+      // Drop any line that looks like a JSON agent artifact
+      if (/^\{/.test(t) && AGENT_KEYS.test(t)) return false;
+      // Drop lines that are pure JSON objects (single line)
+      if (/^\{.*\}$/.test(t) && t.includes(':')) {
+        try { const p = JSON.parse(t); if (p && typeof p === 'object' && AGENT_KEYS.test(t)) return false; } catch {}
+      }
       return true;
     })
     .join('\n')
