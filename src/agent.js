@@ -209,41 +209,61 @@ async function runAgent(question, history, cfg, ltmContext, onToolCall, tenantId
 }
 
 // ── sanitizeAnswer ─────────────────────────────────────────────
-// Strip any leaked JSON, code fences, or agent artifacts from final answer
 function sanitizeAnswer(text) {
   if (!text || typeof text !== 'string') return String(text || '');
 
-  const AGENT_KEYS = /"(thought|action|input|observation)"\s*:/;
+  let out = text;
 
-  let out = text
-    // Remove code fences
-    .replace(/```[\w]*\n?/g, '').replace(/```/g, '')
-    // Remove agent JSON turns — greedy multi-line sweep for {"thought":...}
-    .replace(/\{\s*"thought"\s*:[\s\S]*?"action"\s*:[\s\S]*?"input"\s*:[\s\S]*?\}/g, '')
-    .replace(/\{\s*"thought"\s*:[\s\S]*?"action"\s*:[^}]*\}/g, '')
-    // Remove Observation: lines
-    .replace(/^Observation:\s*/gim, '')
-    // Remove "Thought:" / "Action:" prefixes that some models emit
-    .replace(/^(Thought|Action|Input)\s*:\s*/gim, '')
-    // Line-by-line filter
-    .split('\n')
-    .filter(line => {
-      const t = line.trim();
-      if (!t) return true;
-      // Drop any line that looks like a JSON agent artifact
-      if (/^\{/.test(t) && AGENT_KEYS.test(t)) return false;
-      // Drop lines that are pure JSON objects (single line)
-      if (/^\{.*\}$/.test(t) && t.includes(':')) {
-        try { const p = JSON.parse(t); if (p && typeof p === 'object' && AGENT_KEYS.test(t)) return false; } catch {}
-      }
-      return true;
-    })
-    .join('\n')
-    // Collapse 3+ blank lines into 2
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  // Pass 1: Remove code fences
+  out = out.replace(/```[\w]*\n?/g, '').replace(/```/g, '');
+
+  // Pass 2: Remove agent JSON blocks using brace-matching (robust vs regex)
+  out = _removeAgentJsonBlocks(out);
+
+  // Pass 3: Remove leaked prefixes
+  out = out.replace(/^(Observation|Thought|Action|Input)\s*:\s*/gim, '');
+
+  // Pass 4: Line filter — drop any line that starts with { and has agent keys
+  const AGENT_KEY_RE = /"(thought|action|input|observation)"\s*:/;
+  out = out.split('\n').filter(line => {
+    const t = line.trim();
+    if (!t) return true;
+    if (/^[{[]/.test(t) && AGENT_KEY_RE.test(t)) return false;
+    return true;
+  }).join('\n');
+
+  // Pass 5: Collapse blank lines
+  out = out.replace(/\n{3,}/g, '\n\n').trim();
 
   return out || text.trim();
+}
+
+// Brace-matching remover for agent JSON blocks
+function _removeAgentJsonBlocks(text) {
+  const AGENT_KEY_RE = /"(thought|action|input|observation)"\s*:/;
+  let result = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '{') {
+      // Find matching closing brace
+      let depth = 1;
+      let j = i + 1;
+      while (j < text.length && depth > 0) {
+        if (text[j] === '{') depth++;
+        else if (text[j] === '}') depth--;
+        j++;
+      }
+      const block = text.slice(i, j);
+      if (AGENT_KEY_RE.test(block)) {
+        // Skip this block — it's an agent artifact
+        i = j;
+        continue;
+      }
+    }
+    result += text[i];
+    i++;
+  }
+  return result;
 }
 
 // ── Tool executor ─────────────────────────────────────────────

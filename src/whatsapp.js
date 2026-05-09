@@ -338,8 +338,22 @@ async function handleMsg(msg) {
 
     const cfg  = getConfig(tenantId);
     const text = extractText(msg);
-    if (!text) return;
 
+    // /voice in DM — quoted message → convert to voice note
+    const quotedRawDM = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+    if (text.trim().toLowerCase() === '/voice' && quotedRawDM) {
+      const quotedTxt = quotedRawDM.conversation || quotedRawDM.extendedTextMessage?.text || '';
+      if (quotedTxt) { await handleVoiceCommand(msg, jid, quotedTxt, tenantId); return; }
+    }
+
+    // Voice note in DM → STT → agent
+    const audioDM = msg.message?.audioMessage;
+    if (audioDM) {
+      await handleVoiceNote(msg, jid, text || '', cfg, dmSender, tenantId);
+      return;
+    }
+
+    if (!text) return;
     logFn('QUERY', `[DM][${tenantId}] ${dmSender.split('@')[0]}: ${text.slice(0, 80)}`);
     await handleQuery(msg, jid, text, cfg, dmSender, tenantId);
     return;
@@ -395,6 +409,7 @@ async function handleMsg(msg) {
     });
 
     logGroupMsg(tenantId, jid, {
+      msgId:         msg.key.id,
       senderJid:     sender,
       senderName:    msg.pushName || sender.split('@')[0].split(':')[0],
       text:          text || (locMsg ? '[Kirim lokasi]' : '[Media]'),
@@ -660,6 +675,50 @@ async function sendThinking(jid, quotedMsg) {
   await sendMsg(jid, text, quotedMsg);
 }
 
+// ── Handle mention query in DM — with forward ─────────────────
+async function handleMentionQuery(msg, jid, question, targetJid, tenantId, cfg) {
+  const { getMentions, formatMentions } = require('./grouplog');
+  const tid = tenantId || 'default';
+
+  const hours = /kemarin/i.test(question) ? 48 : 24;
+  const hourLabel = hours === 48 ? '48 jam (kemarin)' : '24 jam';
+
+  await sendMsg(jid, '_Sedang mengecek mention kamu di semua grup..._', msg);
+
+  const mentions = getMentions(tid, targetJid, hours);
+
+  if (!mentions.length) {
+    await sendMsg(jid, `Tidak ada yang men-tag kamu dalam ${hourLabel} terakhir di semua grup yang aku pantau.`);
+    return;
+  }
+
+  // Send formatted summary
+  const rawPhone = targetJid.split('@')[0].split(':')[0];
+  const displayPhone = `0${rawPhone.replace(/^62/, '')}`;
+  const summary = formatMentions(mentions, displayPhone);
+  await sendMsg(jid, summary);
+
+  // Forward original messages (best-effort from msgStore)
+  let forwarded = 0;
+  for (const m of mentions) {
+    if (!m.msgId) continue;
+    const originalMsg = msgStore.get(m.msgId);
+    if (!originalMsg) continue;
+    try {
+      await new Promise(r => setTimeout(r, 600));
+      await sock.sendMessage(jid, { forward: originalMsg });
+      forwarded++;
+    } catch (e) {
+      logFn('DEBUG', `Forward gagal: ${e.message}`);
+    }
+  }
+
+  const suffix = forwarded > 0
+    ? `_(${forwarded} pesan asli di atas diteruskan dari grup)_`
+    : `_(Pesan asli tidak bisa diteruskan — sudah terlalu lama atau belum tersimpan)_`;
+  await sendMsg(jid, suffix);
+}
+
 // ── Answer query — ReAct agent loop ──────────────────────────
 async function handleQuery(msg, jid, text, cfg, senderJid, tenantId) {
   const { addTurn, getHistory } = require('./memory');
@@ -744,6 +803,16 @@ async function handleQuery(msg, jid, text, cfg, senderJid, tenantId) {
       const { clearAll: clearLTM } = require('./ltm');
       clearLTM(tid);
       await sendMsg(jid, 'Semua memori jangka panjang sudah dihapus.', msg);
+      addToChain(jid, senderJid);
+      return;
+    }
+
+    // ── Intent: mention query (who tagged me) ──
+    const isMentionQuery =
+      /\b(siapa|tag|sebut|mention|panggil|dipanggil|ditag|disebutkan|nyebut|manggil)\b/i.test(question) &&
+      /\b(saya|aku|gue|gw|ane|diriku|gua)\b/i.test(question);
+    if (isMentionQuery) {
+      await handleMentionQuery(msg, jid, question, senderJid, tid, cfg);
       addToChain(jid, senderJid);
       return;
     }

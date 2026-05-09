@@ -129,7 +129,9 @@ function getMentions(tenantId, targetJid, hours = 24) {
 
       results.push({
         ts:          e.ts,
+        msgId:       e.msgId || null,
         groupJid,
+        groupName:   e.groupName || groupJid.split('@')[0],
         senderJid:   e.senderJid || '',
         senderName:  e.senderName || '?',
         senderPhone: (e.senderJid || '').split('@')[0].split(':')[0],
@@ -150,17 +152,20 @@ function formatMentions(mentions, targetName) {
     const t     = new Date(m.ts).toLocaleString('id-ID', {
       weekday: 'short', hour: '2-digit', minute: '2-digit',
     });
-    const group = m.groupJid.split('@')[0];
+    const grpDisplay = m.groupName || m.groupJid.split('@')[0];
     const phone = m.senderPhone ? `0${m.senderPhone.replace(/^62/, '')}` : '?';
     return (
       `${i + 1}. *${m.senderName}* (${phone})\n` +
-      `   Grup: ${group}\n` +
+      `   Grup: ${grpDisplay}\n` +
       `   Waktu: ${t}\n` +
       `   Pesan: "${m.text.slice(0, 120)}"`
     );
   });
 
-  return `📣 *Tag untuk ${targetName || 'kamu'} (${mentions.length}x):*\n\n${lines.join('\n\n')}`;
+  return (
+    `📣 *Tag untuk ${targetName || 'kamu'} (${mentions.length}x):*\n\n` +
+    lines.join('\n\n')
+  );
 }
 
 // ── Conversation pattern analysis (who talks to whom) ─────────
