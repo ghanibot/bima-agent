@@ -1,5 +1,7 @@
 'use strict';
 
+const miniBrowser = require('./mini_browser');
+
 // ── Sandbox config ─────────────────────────────────────────────
 const FETCH_TIMEOUT_MS  = 12000;
 const MAX_BODY_BYTES    = 150_000;   // 150 KB max per page
@@ -156,17 +158,24 @@ async function fetchPage(url) {
 
 // ── Main web_search ────────────────────────────────────────────
 async function webSearch(query) {
+  // Try mini-browser first (Playwright + trafilatura, token-efficient)
+  try {
+    if (await miniBrowser.isAvailable()) {
+      const result = await miniBrowser.webSearch(query, { maxResults: 3, maxTokens: 1500 });
+      if (result && result.length > 50) return result;
+    }
+  } catch {}
+
+  // Fallback: original implementation
   try {
     const { instant, urls } = await duckduckgoSearch(query);
 
     const parts = [];
 
-    // Instant answers (no extra fetch needed)
     if (instant.length) {
       parts.push('📌 Jawaban Cepat:\n' + instant.join('\n'));
     }
 
-    // Fetch top result pages in parallel
     if (urls.length) {
       const pages = await Promise.all(urls.slice(0, MAX_PAGES_FETCH).map(fetchPage));
       const valid = pages.filter(Boolean);
@@ -188,6 +197,16 @@ async function webSearch(query) {
 // ── browse_url — fetch any URL and return readable text ────────
 async function browseUrl(url) {
   if (!isSafeUrl(url)) return `URL tidak diizinkan: ${url}`;
+
+  // Try mini-browser first (handles JS-heavy sites, PDFs, stealth mode)
+  try {
+    if (await miniBrowser.isAvailable()) {
+      const result = await miniBrowser.browseUrl(url, { maxTokens: 1500 });
+      if (result && result.length > 50 && !result.startsWith('Failed')) return result;
+    }
+  } catch {}
+
+  // Fallback: original implementation
   try {
     const page = await fetchPage(url);
     if (!page) return `Gagal membaca konten dari ${url}`;
