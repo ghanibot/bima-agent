@@ -6,7 +6,7 @@ const os   = require('os');
 const path = require('path');
 
 const { getConfig, saveConfig, maskKey } = require('./config');
-const { startWA, getWAStatus, logoutWA } = require('./whatsapp');
+const { startWA, getWAStatus, logoutWA, sendWAMessage } = require('./whatsapp');
 const { getKnowledge, searchKnowledge, searchKnowledgeSemantic, compactKnowledge } = require('./db');
 const { testAI, answerQuestion } = require('./ai');
 const { listTenants, addTenant, updateTenant, deleteTenant, getTenant, tenantPaths } = require('./tenant');
@@ -88,6 +88,7 @@ function cmdHelp() {
     ['/ltm',       'Lihat / hapus memori jangka panjang'],
     ['/search',    'Cari di web langsung dari terminal'],
     ['/polymarket','Cari pasar prediksi di Polymarket'],
+    ['/api',        'REST API + Web Admin panel (start/stop/key/status)'],
     ['/tg',        'Kelola Telegram bot (token/start/stop/status)'],
     ['/tenant',    'Kelola tenant (list/add/switch/del/groups)'],
     ['/skill',     'Kelola plugin/skill (list/add/remove/info)'],
@@ -878,6 +879,95 @@ async function cmdTelegram(args) {
 }
 
 // ══════════════════════════════════════════════════════════════
+//  /api — REST API + Web Admin
+// ══════════════════════════════════════════════════════════════
+async function cmdApi(args) {
+  const { startApi, stopApi, getApiStatus } = require('./api');
+  const sub = args[0];
+
+  if (!sub || sub === 'status') {
+    const st = getApiStatus();
+    if (st.running) {
+      println(`REST API: berjalan di http://0.0.0.0:${st.port}\nAdmin Panel: http://localhost:${st.port}/\nAPI Key: ${st.hasKey ? '(aktif)' : '(tidak ada — akses terbuka)'}`);
+    } else {
+      println('REST API: tidak berjalan. Ketik /api start [port]');
+    }
+    return;
+  }
+
+  if (sub === 'start') {
+    const st = getApiStatus();
+    if (st.running) { println(`API sudah berjalan di port ${st.port}`); return; }
+    const port   = parseInt(args[1], 10) || 3000;
+    const cfg    = getConfig(_currentTenant);
+    const apiKey = cfg.apiKey || null;
+    try {
+      await startApi({
+        port,
+        apiKey,
+        getStatus: () => {
+          const ws = getWAStatus();
+          const tgMod = (() => { try { return require('./telegram'); } catch { return null; } })();
+          const tgSt  = tgMod ? tgMod.getTelegramStatus() : {};
+          return {
+            waConnected: ws.connected,
+            tgConnected: !!tgSt.running,
+            tgUsername:  tgSt.username || null,
+            provider:    cfg.provider,
+            model:       cfg.model,
+            tenant:      _currentTenant,
+          };
+        },
+        sendMsg:   (jid, text) => sendWAMessage(jid, text),
+        runQuery:  async (question, tenantId) => {
+          const { runAgent } = require('./agent');
+          const c = getConfig(tenantId || _currentTenant);
+          return runAgent(question, [], c, '', null, tenantId || _currentTenant, null, 'api');
+        },
+        tenantId:  () => _currentTenant,
+      });
+      ui.log('API', `REST API berjalan di port ${port} — Admin: http://localhost:${port}/`);
+      println(`✓ REST API aktif di http://localhost:${port}/\n  Admin Panel: http://localhost:${port}/\n  Kirim pesan via: POST http://localhost:${port}/api/send`);
+      const cfgNow = getConfig(_currentTenant);
+      cfgNow.apiPort = port;
+      saveConfig(cfgNow, _currentTenant);
+      ui.updateStatus({ provider: cfgNow.provider, model: cfgNow.model, tenant: _currentTenant, apiPort: port });
+    } catch (e) {
+      println(`✗ Gagal start API: ${e.message}`);
+    }
+    return;
+  }
+
+  if (sub === 'stop') {
+    await stopApi();
+    const cfgStop = getConfig(_currentTenant);
+    delete cfgStop.apiPort;
+    saveConfig(cfgStop, _currentTenant);
+    ui.log('API', 'REST API dihentikan');
+    println('✓ REST API dihentikan.');
+    const cfgS = getConfig(_currentTenant);
+    ui.updateStatus({ provider: cfgS.provider, model: cfgS.model, tenant: _currentTenant });
+    return;
+  }
+
+  if (sub === 'key') {
+    const newKey = args[1];
+    if (!newKey) {
+      const cfg = getConfig(_currentTenant);
+      println(cfg.apiKey ? `API Key saat ini: ${cfg.apiKey}` : 'Belum ada API key. Ketik /api key <kunci>');
+      return;
+    }
+    const cfg = getConfig(_currentTenant);
+    cfg.apiKey = newKey;
+    saveConfig(cfg, _currentTenant);
+    println(`✓ API key disimpan: ${newKey}`);
+    return;
+  }
+
+  println('Subcommand: status | start [port] | stop | key [nilai]');
+}
+
+// ══════════════════════════════════════════════════════════════
 //  /polymarket
 // ══════════════════════════════════════════════════════════════
 async function cmdPolymarket(query) {
@@ -1044,6 +1134,12 @@ async function main() {
     ui.log('TG', 'Token belum diset. Gunakan /tg token <TOKEN> lalu /tg start.');
   }
 
+  // Auto-start REST API if port configured
+  const apiPort = getConfig(_currentTenant).apiPort;
+  if (apiPort) {
+    setTimeout(() => cmdApi(['start', String(apiPort)]), 1500);
+  }
+
   // Set up input handler
   ui.onInput(async (line) => {
     // Echo user input to chat panel
@@ -1077,6 +1173,10 @@ async function main() {
       else if (line.startsWith('/ltm del ')){ cmdLTMDelete(line.slice(9).trim()); }
       else if (line.startsWith('/search ')) { await cmdSearch(line.slice(8).trim()); }
       else if (line === '/polymarket' || line.startsWith('/polymarket ')) { await cmdPolymarket(line.slice(12).trim()); }
+      else if (line === '/api' || line.startsWith('/api ')) {
+        const parts = line.slice(4).trim().split(/\s+/).filter(Boolean);
+        await cmdApi(parts);
+      }
       else if (line === '/tg' || line.startsWith('/tg ')) {
         const parts = line.slice(3).trim().split(/\s+/).filter(Boolean);
         await cmdTelegram(parts);

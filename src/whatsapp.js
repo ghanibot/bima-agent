@@ -1026,4 +1026,9 @@ async function logoutWA() {
   started = false;
 }
 
-module.exports = { startWA, getWAStatus, logoutWA };
+function sendWAMessage(jid, text) {
+  if (!sock) throw new Error('WhatsApp tidak terhubung');
+  return sock.sendMessage(jid, { text });
+}
+
+module.exports = { startWA, getWAStatus, logoutWA, sendWAMessage };

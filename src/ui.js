@@ -29,6 +29,7 @@ const LOG_PREFIX = {
   WARN:  C.yellow('[WARN]'),
   WA:    C.green('[WA  ]'),
   TG:    C.cyan('[TG  ]'),
+  API:   C.yellow('[API ]'),
   AGENT: C.cyan('[AGNT]'),
   DEBUG: C.gray('[DEBG]'),
   STT:   C.yellow('[STT ]'),
@@ -211,15 +212,17 @@ function log(type, msg) {
 }
 
 // ── updateStatus ──────────────────────────────────────────────
-function updateStatus({ provider, model, waConnected, tenant, tgConnected, tgUsername } = {}) {
+function updateStatus({ provider, model, waConnected, tenant, tgConnected, tgUsername, apiPort } = {}) {
   const wa  = waConnected  ? C.green('WA:●') : C.red('WA:○');
   const tg  = tgConnected  ? C.cyan(`TG:@${tgUsername || '●'}`) : C.gray('TG:○');
+  const api = apiPort      ? C.yellow(`API:${apiPort}`) : '';
   const ten = tenant || 'default';
   const ai  = `${provider || '--'}/${model || '--'}`;
   _clearCurrentLine();
   process.stdout.write(
     C.gray('[STATUS] ') +
-    C.dim(`tenant:${ten}  ai:${ai}  `) + wa + C.dim('  ') + tg + '\n'
+    C.dim(`tenant:${ten}  ai:${ai}  `) + wa + C.dim('  ') + tg +
+    (api ? C.dim('  ') + api : '') + '\n'
   );
   if (_rl && !_pickerActive) _rl.prompt(true);
 }
