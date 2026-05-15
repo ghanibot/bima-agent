@@ -237,42 +237,30 @@ function ask(question) {
   return new Promise(resolve => {
     _clearCurrentLine();
     process.stdout.write(C.yellow(question));
+
     const prevPickerActive = _pickerActive;
     _pickerActive = true;
 
-    // Pause _rl agar tidak double-echo input saat ask() aktif
-    try { if (_rl) _rl.pause(); } catch {}
-
-    const savedKeypress = process.stdin.rawListeners('keypress');
-    process.stdin.removeAllListeners('keypress');
-    if (process.stdin.isTTY) process.stdin.setRawMode(false);
-
-    // terminal:false → tmp uses data events, tidak ada keypress/echo conflict
-    const tmp = readline.createInterface({
-      input: process.stdin, output: process.stdout, terminal: false,
-    });
+    // Resume _rl so it processes the user's typed answer
+    try { if (_rl) _rl.resume(); } catch {}
 
     let settled = false;
-    function cleanup(ans) {
+    function onLine(ans) {
       if (settled) return;
       settled = true;
-      try { tmp.close(); } catch {}
-      try { if (process.stdin.isTTY) process.stdin.setRawMode(true); } catch {}
-      savedKeypress.forEach(l => { try { process.stdin.on('keypress', l); } catch {} });
-      // Resume _rl dan bersihkan sisa buffer
-      try {
-        if (_rl) {
-          _rl.resume();
-          if (_rl.line) _rl.write(null, { ctrl: true, name: 'u' });
-        }
-      } catch {}
+      _rl.removeListener('line', onLine);
       _pickerActive = prevPickerActive;
       if (!_pickerActive) _flushLogs();
       resolve(ans);
     }
 
-    tmp.once('line',  ans => cleanup(ans));
-    tmp.once('close', ()  => cleanup(''));  // stdin closed unexpectedly
+    // Safety: resolve with '' if stdin closes unexpectedly
+    function onClose() {
+      if (!settled) onLine('');
+    }
+
+    _rl.on('line', onLine);
+    _rl.once('close', onClose);
   });
 }
 
@@ -298,14 +286,11 @@ function _stealKeypress(handler) {
   return function restore() {
     process.stdin.removeAllListeners('keypress');
     saved.forEach(l => process.stdin.on('keypress', l));
-    // Resume _rl dan bersihkan buffer yang mungkin tertampung
     try {
       if (_rl) {
         _rl.resume();
-        // Buang karakter yang sempat masuk ke buffer _rl selama picker
-        if (_rl.line) {
-          _rl.write(null, { ctrl: true, name: 'u' });
-        }
+        // Buang karakter sisa di buffer readline
+        _rl.write(null, { ctrl: true, name: 'u' });
       }
     } catch {}
   };

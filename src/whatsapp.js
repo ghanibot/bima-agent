@@ -383,8 +383,11 @@ async function handleMsg(msg) {
     ? (quotedRaw.conversation || quotedRaw.extendedTextMessage?.text || quotedRaw.imageMessage?.caption || '').slice(0, 120)
     : '';
 
-  const text   = extractText(msg);
-  const locMsg = msg.message?.locationMessage;
+  const text     = extractText(msg);
+  const locMsg   = msg.message?.locationMessage;
+  const imgMsg   = msg.message?.imageMessage;
+  const mentioned = contextInfo.mentionedJid || [];
+  const replyTo   = contextInfo.participant   || '';
 
   // Track member profile on every group message
   try {
@@ -407,15 +410,7 @@ async function handleMsg(msg) {
   // ── Log ALL group messages (24h rolling) ─────────────────
   try {
     const { logMsg: logGroupMsg } = require('./grouplog');
-
-    // Build mention names from the group participant list
-    const mentionedNames = mentioned.map(mjid => {
-      const grpInfo  = state.groups.find(g => g.id === jid);
-      const phone    = mjid.split('@')[0].split(':')[0];
-      // Try to find a cached name — fall back to phone number
-      return phone;
-    });
-
+    const mentionedNames = mentioned.map(mjid => mjid.split('@')[0].split(':')[0]);
     logGroupMsg(tenantId, jid, {
       msgId:         msg.key.id,
       senderJid:     sender,
@@ -440,12 +435,13 @@ async function handleMsg(msg) {
   // ── File collector — semua grup yang bot ikuti ───────────
   {
     const docMsg2 = msg.message?.documentMessage;
-    if (docMsg2) await processFile(msg, docMsg2, jid, tenantId);
+    if (docMsg2) {
+      try { await processFile(msg, docMsg2, jid, tenantId); } catch (e) {
+        logFn('ERROR', `processFile error: ${e.message}`);
+        try { await sendMsg(jid, `Gagal memproses file: ${e.message}`, msg); } catch {}
+      }
+    }
   }
-
-  const imgMsg    = msg.message?.imageMessage;
-  const mentioned = contextInfo.mentionedJid || [];
-  const replyTo   = contextInfo.participant   || '';
 
   const matchesUs  = (j) => [...botIdentities].some(id => j.includes(id));
   const isMention  = botIdentities.size > 0 && mentioned.some(matchesUs);
@@ -618,9 +614,18 @@ async function processFile(msg, docMsg, jid, tenantId) {
   const mime     = docMsg.mimetype || '';
   const filename = docMsg.fileName || `file_${Date.now()}`;
   const size     = docMsg.fileLength || 0;
+  const ext      = (filename.split('.').pop() || '').toLowerCase();
 
-  const supported = ['pdf', 'spreadsheet', 'excel', 'wordprocessingml', 'presentationml', 'powerpoint', 'text/plain', 'msword'];
-  if (!supported.some(s => mime.includes(s))) return;
+  const supportedMime = ['pdf', 'spreadsheet', 'excel', 'wordprocessingml', 'presentationml', 'powerpoint', 'text/plain', 'msword', 'officedocument'];
+  const supportedExt  = new Set(['pdf', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'csv', 'txt', 'md', 'json']);
+
+  const mimeOk = supportedMime.some(s => mime.includes(s));
+  const extOk  = supportedExt.has(ext);
+
+  if (!mimeOk && !extOk) {
+    logFn('DEBUG', `File skip (MIME tidak didukung): ${mime} / ${filename}`);
+    return;
+  }
 
   if (!checkSize(size)) {
     await sendMsg(jid, `File *${filename}* terlalu besar (maks 10MB), tidak bisa diproses.`, msg);
