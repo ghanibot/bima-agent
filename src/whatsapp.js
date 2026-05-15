@@ -1023,7 +1023,8 @@ function matchContactQuery(text) {
   const t = text.trim();
   // Patterns: "ada no X?", "nomor X?", "no hp X?", "kontak X?", "nomer X?", "carikan no X"
   const patterns = [
-    /(?:ada\s+)?(?:no|nomor|nomer|no\.?\s*hp|no\.?\s*wa|no\.?\s*telp|kontak|contact)\s+(?:dari\s+)?(.+?)(?:\?|$)/i,
+    // "ada no pak X?" / "nomor pak X?" / "no.wa pak X?" — keyword lalu nama
+    /(?:ada\s+)?(?:no\.?\s*(?:hp|wa|telp|telpon|telepon)|nomor\s*(?:hp|wa|telp|telpon|telepon)?|nomer\s*(?:hp|wa)?|kontak|contact)\s+(?:dari\s+)?(.+?)(?:\?|$)/i,
     /(?:carikan?|cari|cek)\s+(?:no|nomor|nomer|kontak)\s+(?:dari\s+)?(.+?)(?:\?|$)/i,
     /(?:berapa|apa)\s+(?:no|nomor|nomer|kontak)\s+(?:dari\s+)?(.+?)(?:\?|$)/i,
   ];
