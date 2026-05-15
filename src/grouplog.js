@@ -205,8 +205,14 @@ function getConversationPatterns(tenantId, groupJid, hours = 24) {
   return { topPairs, topActive, totalMessages: entries.length };
 }
 
+// getRecentMessages — last N entries for workflow wa.read_group node
+function getRecentMessages(tenantId, groupJid, limit = 10) {
+  return load(tenantId, groupJid).slice(-limit);
+}
+
 module.exports = {
   logMsg, getLog, formatLog, summarize,
   getPersonLocation, getMentions, formatMentions,
   listGroupJids, getConversationPatterns,
+  getRecentMessages,
 };

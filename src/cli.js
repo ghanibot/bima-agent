@@ -83,6 +83,7 @@ function cmdHelp() {
     ['/knowledge', 'Lihat dokumen tersimpan'],
     ['/contacts',   'Kelola buku kontak (nama → nomor telepon)'],
     ['/blacklist',  'Lihat/hapus nomor yang diblacklist (guard)'],
+    ['/workflow',   'Kelola workflow otomatis (list/run/create/ai/enable)'],
     ['/compact',   'Kompres konteks dokumen (hemat token)'],
     ['/stt',       'Konfigurasi Speech-to-Text (voice note)'],
     ['/tts',       'Konfigurasi Text-to-Speech (suara Bima)'],
@@ -424,6 +425,714 @@ function cmdBlacklist(args) {
   });
   out += '─'.repeat(40) + '\nHapus: /blacklist del <nomor>';
   println(out);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  /workflow
+// ══════════════════════════════════════════════════════════════
+async function cmdWorkflow(args) {
+  const {
+    listWorkflows, getWorkflow, saveWorkflow, deleteWorkflow,
+    createWorkflow, runWorkflow, scheduleWorkflow, unscheduleWorkflow,
+    activateTriggers, deactivateTriggers,
+    getRunHistory, getRunStats,
+  } = require('./workflow');
+  const { sendWAMessage } = require('./whatsapp');
+
+  const sub = args[0];
+
+  // ── list ──────────────────────────────────────────────────
+  if (!sub || sub === 'list') {
+    const workflows = listWorkflows(_currentTenant);
+    let out = `WORKFLOW — ${workflows.length} workflow\n` + '─'.repeat(50) + '\n';
+    if (!workflows.length) {
+      out += 'Belum ada workflow.\nBuat: /workflow create';
+    } else {
+      workflows.forEach((wf, i) => {
+        const st  = wf.enabled ? '● aktif' : '○ nonaktif';
+        const trigMap = {
+          schedule:        `⏱ ${wf.trigger?.interval}`,
+          'wa.message':    `💬 "${wf.trigger?.match || '*'}"`,
+          file:            `📁 ${wf.trigger?.path || '?'}`,
+          webhook:         `🔗 /webhook/${wf.trigger?.webhookId || wf.id}`,
+          'wa.group_event':`👥 ${(wf.trigger?.actions || ['add','remove']).join('/')}`,
+        };
+        const trg = trigMap[wf.trigger?.type] || '⚡ manual';
+        out += `  ${i + 1}. [${st}] ${wf.id}\n`;
+        out += `     ${wf.name}\n`;
+        out += `     Trigger: ${trg} | Node: ${(wf.nodes || []).length}\n`;
+      });
+      out += '─'.repeat(50);
+      out += '\nVisual: /workflow view <id> | Run: /workflow run <id> | Enable: /workflow enable <id>';
+    }
+    println(out);
+    return;
+  }
+
+  // ── info ──────────────────────────────────────────────────
+  if (sub === 'info') {
+    const id = args[1];
+    if (!id) { println('Contoh: /workflow info <id>'); return; }
+    const wf = getWorkflow(_currentTenant, id);
+    if (!wf) { println(`✗ Workflow "${id}" tidak ada.`); return; }
+    let out = `WORKFLOW: ${wf.id}\n` + '─'.repeat(50) + '\n';
+    out += `Nama       : ${wf.name}\n`;
+    out += `Deskripsi  : ${wf.description || '-'}\n`;
+    out += `Status     : ${wf.enabled ? '● aktif' : '○ nonaktif'}\n`;
+    out += `Trigger    : ${JSON.stringify(wf.trigger)}\n`;
+    out += `Entry node : ${wf.entry}\n`;
+    out += `Nodes (${(wf.nodes||[]).length}):\n`;
+    (wf.nodes || []).forEach(n => {
+      out += `  - ${n.id} [${n.type}]`;
+      if (n.next) out += ` → ${n.next}`;
+      if (n.branches) out += ` branches:${JSON.stringify(n.branches)}`;
+      out += '\n';
+    });
+    out += '─'.repeat(50);
+    println(out);
+    return;
+  }
+
+  // ── view — ASCII visualization ────────────────────────────
+  if (sub === 'view') {
+    const id = args[1];
+    if (!id) { println('Contoh: /workflow view <id>'); return; }
+    const wf = getWorkflow(_currentTenant, id);
+    if (!wf) { println(`✗ Workflow "${id}" tidak ada.`); return; }
+    const { renderWorkflow } = require('./workflow_view');
+    println(renderWorkflow(wf));
+    return;
+  }
+
+  // ── run ───────────────────────────────────────────────────
+  if (sub === 'run') {
+    const id    = args[1];
+    const input = args.slice(2).join(' ').trim();
+    if (!id) { println('Contoh: /workflow run <id> [input]'); return; }
+    const wf = getWorkflow(_currentTenant, id);
+    if (!wf) { println(`✗ Workflow "${id}" tidak ada.`); return; }
+
+    println(`⏳ Menjalankan workflow "${id}"...`);
+    const wa = getWAStatus();
+
+    const sendFn = async (jid, text) => {
+      if (wa.connected && jid) {
+        await sendWAMessage(jid, text);
+      } else {
+        println(`[WA MOCK] → ${jid || 'no-jid'}: ${text}`);
+      }
+    };
+
+    try {
+      const run = await runWorkflow(wf, {
+        _tenantId:  _currentTenant,
+        _jid:       null,
+        _sender:    'cli',
+        _trigger:   'manual',
+        _sendFn:    sendFn,
+        lastOutput: input || '',
+        message:    input || '',
+        input:      input || '',
+      }, log);
+
+      const { renderRunTrace } = require('./workflow_view');
+      println(renderRunTrace(wf, run));
+    } catch (e) {
+      println(`✗ Error: ${e.message}`);
+    }
+    return;
+  }
+
+  // ── enable ────────────────────────────────────────────────
+  if (sub === 'enable') {
+    const id = args[1];
+    if (!id) { println('Contoh: /workflow enable <id>'); return; }
+    const wf = getWorkflow(_currentTenant, id);
+    if (!wf) { println(`✗ Workflow "${id}" tidak ada.`); return; }
+    wf.enabled = true;
+    saveWorkflow(_currentTenant, wf);
+    const started = activateTriggers(_currentTenant, wf, { _tenantId: _currentTenant }, log);
+    const trigDesc = {
+      schedule:       `dijadwalkan setiap ${wf.trigger?.interval}`,
+      file:           `memantau file: ${wf.trigger?.path}`,
+      webhook:        `webhook ID: ${wf.trigger?.webhookId || wf.id}`,
+      'wa.message':   `keyword: "${wf.trigger?.match || '*'}"`,
+      'wa.group_event': `event grup: ${(wf.trigger?.actions || ['add','remove']).join('/')}`,
+      manual:         'dijalankan manual',
+    }[wf.trigger?.type] || '';
+    println(`✓ Workflow "${id}" aktif${trigDesc ? ' — ' + trigDesc : ''}.`);
+    return;
+  }
+
+  // ── disable ───────────────────────────────────────────────
+  if (sub === 'disable') {
+    const id = args[1];
+    if (!id) { println('Contoh: /workflow disable <id>'); return; }
+    const wf = getWorkflow(_currentTenant, id);
+    if (!wf) { println(`✗ Workflow "${id}" tidak ada.`); return; }
+    wf.enabled = false;
+    saveWorkflow(_currentTenant, wf);
+    deactivateTriggers(_currentTenant, id);
+    println(`✓ Workflow "${id}" dinonaktifkan.`);
+    return;
+  }
+
+  // ── delete / del ──────────────────────────────────────────
+  if (sub === 'delete' || sub === 'del') {
+    const id = args[1];
+    if (!id) { println('Contoh: /workflow del <id>'); return; }
+    const confirm = (await ask(` ! Hapus workflow "${id}"? (y/N): `)).trim().toLowerCase();
+    if (confirm !== 'y' && confirm !== 'ya') { println('Dibatalkan.'); return; }
+    deactivateTriggers(_currentTenant, id);
+    const ok = deleteWorkflow(_currentTenant, id);
+    println(ok ? `✓ Workflow "${id}" dihapus.` : `✗ Workflow "${id}" tidak ada.`);
+    return;
+  }
+
+  // ── create — interactive wizard ───────────────────────────
+  if (sub === 'create') {
+    println('WORKFLOW BARU — Wizard\n' + '─'.repeat(50));
+    println('(Kosongkan untuk batal)\n');
+
+    const id   = (await ask(' ID workflow (huruf kecil, tanpa spasi): ')).trim().replace(/\s+/g, '_');
+    if (!id) { println('Dibatalkan.'); return; }
+
+    const name = (await ask(' Nama tampilan workflow: ')).trim();
+    if (!name) { println('Dibatalkan.'); return; }
+
+    const desc = (await ask(' Deskripsi (opsional): ')).trim();
+
+    // Trigger type
+    const triggerIdx = await ui.selectMenu('TRIGGER — Kapan workflow dijalankan?', [
+      { label: 'Manual saja',      desc: '/workflow run <id>' },
+      { label: 'Pesan WA',         desc: 'Jika ada pesan cocok keyword/regex' },
+      { label: 'Terjadwal',        desc: 'Interval: 30s / 5m / 1h / 24h' },
+      { label: 'File berubah',     desc: 'Pantau folder/file di sistem lokal' },
+      { label: 'Webhook HTTP',     desc: 'POST ke /webhook/<id> memicu workflow' },
+      { label: 'Event grup WA',    desc: 'Member join/leave grup' },
+    ]);
+    if (triggerIdx === null) { println('Dibatalkan.'); return; }
+
+    let trigger = { type: 'manual' };
+    if (triggerIdx === 1) {
+      const match     = (await ask(' Keyword/regex (kosong = semua pesan): ')).trim();
+      const exclusive = (await ask(' Hentikan respon AI normal? (y/N): ')).trim().toLowerCase();
+      trigger = { type: 'wa.message', match: match || null, exclusive: exclusive === 'y' };
+    } else if (triggerIdx === 2) {
+      const interval = (await ask(' Interval (contoh: 30s / 5m / 1h / 24h): ')).trim();
+      trigger = { type: 'schedule', interval };
+    } else if (triggerIdx === 3) {
+      const watchPath = (await ask(' Path folder/file (contoh: ~/Documents/inbox): ')).trim();
+      const evtIdx    = await ui.selectMenu('Event yang dipantau:', [
+        { label: 'Baru + Berubah',  desc: 'created & modified' },
+        { label: 'Hanya baru',      desc: 'created only' },
+        { label: 'Hanya berubah',   desc: 'modified only' },
+        { label: 'Semua',           desc: 'all' },
+      ]);
+      const evtMap = [['created','modified'], ['created'], ['modified'], ['all']];
+      trigger = { type: 'file', path: watchPath, events: evtMap[evtIdx ?? 0] };
+    } else if (triggerIdx === 4) {
+      const webhookId = (await ask(' Webhook ID (default = workflow id): ')).trim() || null;
+      const secret    = (await ask(' Secret header (kosong = tidak ada): ')).trim() || null;
+      trigger = { type: 'webhook', webhookId: webhookId || undefined, secret: secret || undefined };
+    } else if (triggerIdx === 5) {
+      const grpJid    = (await ask(' JID grup (kosong = semua grup tenant): ')).trim() || null;
+      const actIdx    = await ui.selectMenu('Event yang dipantau:', [
+        { label: 'Join & Leave',  desc: 'add & remove' },
+        { label: 'Hanya join',   desc: 'add only' },
+        { label: 'Hanya leave',  desc: 'remove only' },
+        { label: 'Semua',        desc: 'add/remove/promote/demote' },
+      ]);
+      const actMap = [['add','remove'], ['add'], ['remove'], ['add','remove','promote','demote']];
+      trigger = { type: 'wa.group_event', jid: grpJid || undefined, actions: actMap[actIdx ?? 0] };
+    }
+
+    // Node wizard
+    const nodes = [];
+    println('\nTambah node satu per satu. Kosongkan ID untuk selesai.\n');
+
+    const NODE_MENU = [
+      { label: 'wa.send',       desc: 'Kirim pesan ke chat sumber' },
+      { label: 'wa.send_to',    desc: 'Kirim pesan ke JID tertentu' },
+      { label: 'ai.call',       desc: 'Panggil AI dengan prompt' },
+      { label: 'http.request',  desc: 'HTTP GET/POST ke URL eksternal' },
+      { label: 'shell',         desc: 'Jalankan perintah OS (butuh sandbox on)' },
+      { label: 'wa.read_group', desc: 'Baca N pesan terakhir dari grup' },
+      { label: 'transform',     desc: 'Transformasi output dengan ekspresi JS' },
+      { label: 'json.extract',  desc: 'Ambil field dari JSON output' },
+      { label: 'condition',     desc: 'Percabangan if/else' },
+      { label: 'loop',          desc: 'Iterasi array, jalankan body per item' },
+      { label: 'repeat',        desc: 'Ulangi body chain N kali' },
+      { label: 'parallel',      desc: 'Jalankan beberapa branch bersamaan' },
+      { label: 'workflow.run',  desc: 'Panggil workflow lain sebagai sub-workflow' },
+      { label: 'delay',         desc: 'Tunggu N detik' },
+      { label: 'memory.read',   desc: 'Baca riwayat percakapan' },
+      { label: 'memory.write',  desc: 'Simpan fakta ke LTM' },
+      { label: 'set',           desc: 'Set variabel konteks' },
+      { label: 'log',           desc: 'Log ke CLI (debug)' },
+      { label: 'Selesai',       desc: 'Tidak ada node lagi' },
+    ];
+    const NODE_TYPES = NODE_MENU.slice(0, -1).map(n => n.label);
+
+    while (true) {
+      const nodeTypeIdx = await ui.selectMenu('NODE — Pilih tipe', NODE_MENU);
+      if (nodeTypeIdx === null || nodeTypeIdx === NODE_MENU.length - 1) break;
+
+      const nodeType = NODE_TYPES[nodeTypeIdx];
+
+      const nodeId = (await ask(` ID node (default: node${nodes.length + 1}): `)).trim()
+        || `node${nodes.length + 1}`;
+
+      const node = { id: nodeId, type: nodeType, config: {} };
+
+      if (nodeType === 'wa.send') {
+        node.config.text = await ask(' Teks pesan (gunakan {{lastOutput}}): ');
+      } else if (nodeType === 'wa.send_to') {
+        node.config.jid  = await ask(' JID tujuan (contoh: 628xxx@s.whatsapp.net): ');
+        node.config.text = await ask(' Teks pesan: ');
+      } else if (nodeType === 'ai.call') {
+        node.config.prompt = await ask(' Prompt (gunakan {{message}} untuk teks WA): ');
+        node.config.system = (await ask(' System prompt (kosong = default Bima): ')).trim() || undefined;
+      } else if (nodeType === 'http.request') {
+        node.config.url     = await ask(' URL (gunakan {{lastOutput}} untuk dinamis): ');
+        const methodIdx     = await ui.selectMenu('Method', [
+          { label: 'GET' }, { label: 'POST' }, { label: 'PUT' }, { label: 'DELETE' },
+        ]);
+        node.config.method  = ['GET', 'POST', 'PUT', 'DELETE'][methodIdx ?? 0];
+        if (node.config.method !== 'GET') {
+          const body = (await ask(' Body JSON (kosong = tidak ada): ')).trim();
+          if (body) node.config.body = body;
+        }
+        const extract = (await ask(' Extract path dari response (contoh: data.name, kosong = semua): ')).trim();
+        if (extract) node.config.extract = extract;
+      } else if (nodeType === 'shell') {
+        node.config.cmd     = await ask(' Perintah OS (contoh: echo {{message}}): ');
+        node.config.timeout = parseInt(await ask(' Timeout detik (default 10): ')) || 10;
+      } else if (nodeType === 'wa.read_group') {
+        node.config.jid   = (await ask(' JID grup (kosong = grup sumber): ')).trim() || undefined;
+        node.config.limit = parseInt(await ask(' Jumlah pesan (default 10): ')) || 10;
+      } else if (nodeType === 'transform') {
+        println(' Ekspresi JS — input tersedia sebagai variabel `input`');
+        println(' Contoh: input.toUpperCase()  |  input.split(",").length');
+        node.config.expr     = await ask(' Ekspresi: ');
+        const inputVar       = (await ask(' Nama variabel input (kosong = lastOutput): ')).trim();
+        if (inputVar) node.config.inputVar = inputVar;
+      } else if (nodeType === 'json.extract') {
+        node.config.path = await ask(' Path JSON (contoh: data.items.0.name): ');
+      } else if (nodeType === 'condition') {
+        node.config.expr = await ask(' Ekspresi (contoh: lastOutput.includes("ya")): ');
+        const trueNext   = (await ask(' Node jika TRUE (kosong = stop): ')).trim();
+        const falseNext  = (await ask(' Node jika FALSE (kosong = stop): ')).trim();
+        node.branches = { true: trueNext || null, false: falseNext || null };
+      } else if (nodeType === 'loop') {
+        println(' Loop iterasi array. Body chain = rangkaian node yg dijalankan per item.');
+        node.config.items     = (await ask(' Variabel/ekspresi array (contoh: {{lastOutput}}): ')).trim();
+        node.config.itemVar   = (await ask(' Nama variabel item (default: item): ')).trim() || 'item';
+        node.config.body      = (await ask(' ID node pertama body chain: ')).trim();
+        node.config.maxIterations = parseInt(await ask(' Maks iterasi (default 20): ')) || 20;
+      } else if (nodeType === 'repeat') {
+        node.config.times = parseInt(await ask(' Berapa kali diulang: ')) || 2;
+        node.config.body  = (await ask(' ID node pertama body chain: ')).trim();
+      } else if (nodeType === 'parallel') {
+        println(' Parallel menjalankan beberapa branch bersamaan, menunggu semua selesai.');
+        const rawBranches = (await ask(' ID node awal setiap branch (pisah koma): ')).trim();
+        node.config.branches = rawBranches.split(',').map(s => s.trim()).filter(Boolean);
+      } else if (nodeType === 'workflow.run') {
+        node.config.workflowId = (await ask(' ID workflow yang dipanggil: ')).trim();
+        node.config.input = (await ask(' Input ke sub-workflow (kosong = lastOutput): ')).trim() || undefined;
+      } else if (nodeType === 'delay') {
+        node.config.seconds = parseInt(await ask(' Detik: ')) || 1;
+      } else if (nodeType === 'memory.write') {
+        node.config.content = await ask(' Konten fakta (gunakan {{lastOutput}}): ');
+      } else if (nodeType === 'set') {
+        node.config.key   = await ask(' Nama variabel: ');
+        node.config.value = await ask(' Nilai (gunakan {{lastOutput}}): ');
+      } else if (nodeType === 'log') {
+        node.config.text = await ask(' Teks log: ');
+      }
+
+      const onErrIdx = await ui.selectMenu('Jika node ini gagal:', [
+        { label: 'Stop workflow',   desc: 'Hentikan seluruh workflow (default)' },
+        { label: 'Lanjut ke next',  desc: 'Abaikan error, lanjut ke node berikutnya' },
+      ]);
+      if (onErrIdx === 1) node.onError = 'continue';
+
+      nodes.push(node);
+      println(`  ✓ Node "${nodeId}" [${nodeType}] ditambahkan.`);
+    }
+
+    // Wire next pointers (sequential by default for non-condition nodes)
+    for (let i = 0; i < nodes.length - 1; i++) {
+      if (nodes[i].type !== 'condition' && !nodes[i].next) {
+        nodes[i].next = nodes[i + 1].id;
+      }
+    }
+
+    try {
+      const wf = createWorkflow(_currentTenant, {
+        id, name, description: desc, trigger, nodes, entry: nodes[0]?.id || null,
+      });
+      let out = `\n✓ Workflow "${wf.id}" berhasil dibuat!\n`;
+      out += `  Node  : ${nodes.length}\n`;
+      out += `  Trigger: ${JSON.stringify(trigger)}\n`;
+      out += `  Status: nonaktif\n\n`;
+      out += `Aktifkan: /workflow enable ${wf.id}\n`;
+      out += `Jalankan: /workflow run ${wf.id}`;
+      println(out);
+    } catch (e) {
+      println(`✗ Gagal: ${e.message}`);
+    }
+    return;
+  }
+
+  // ── ai — build workflow from NL description ──────────────
+  if (sub === 'ai') {
+    const desc = args.slice(1).join(' ').trim();
+    if (!desc) {
+      println('Contoh: /workflow ai "kirim rekap harga BTC setiap jam ke grup"');
+      return;
+    }
+
+    println(`⏳ AI sedang membuat workflow...\n"${desc.slice(0, 80)}"`);
+    try {
+      const { buildWorkflowFromDescription, formatWorkflowSummary } = require('./workflow_ai');
+      const { wf, raw } = await buildWorkflowFromDescription(desc, _currentTenant);
+
+      println('─'.repeat(50) + formatWorkflowSummary(wf) + '─'.repeat(50));
+
+      const choice = await ui.selectMenu('Simpan workflow ini?', [
+        { label: 'Simpan',         desc: `Simpan sebagai "${wf.id}" (nonaktif)` },
+        { label: 'Simpan + aktif', desc: 'Simpan langsung aktifkan' },
+        { label: 'Edit ID/nama',   desc: 'Ganti ID atau nama sebelum simpan' },
+        { label: 'Batalkan',       desc: 'Buang workflow ini' },
+      ]);
+
+      if (choice === null || choice === 3) { println('Dibatalkan.'); return; }
+
+      if (choice === 2) {
+        const newId   = (await ask(` ID baru (sekarang: ${wf.id}): `)).trim() || wf.id;
+        const newName = (await ask(` Nama baru (sekarang: ${wf.name}): `)).trim() || wf.name;
+        wf.id   = newId.replace(/\s+/g, '_');
+        wf.name = newName;
+      }
+
+      // Check duplicate
+      const existing = getWorkflow(_currentTenant, wf.id);
+      if (existing) {
+        const overwrite = (await ask(` ! Workflow "${wf.id}" sudah ada. Timpa? (y/N): `)).trim().toLowerCase();
+        if (overwrite !== 'y' && overwrite !== 'ya') { println('Dibatalkan.'); return; }
+      }
+
+      wf.tenant = _currentTenant;
+      saveWorkflow(_currentTenant, wf);
+
+      if (choice === 1) {
+        wf.enabled = true;
+        saveWorkflow(_currentTenant, wf);
+        activateTriggers(_currentTenant, wf, { _tenantId: _currentTenant }, log);
+        println(`✓ Workflow "${wf.id}" disimpan & aktif.`);
+      } else {
+        println(`✓ Workflow "${wf.id}" disimpan (nonaktif).\nAktifkan: /workflow enable ${wf.id}`);
+      }
+    } catch (e) {
+      println(`✗ AI error: ${e.message}`);
+    }
+    return;
+  }
+
+  // ── refine — improve existing workflow via AI ─────────────
+  if (sub === 'refine') {
+    const id   = args[1];
+    const inst = args.slice(2).join(' ').trim();
+    if (!id || !inst) {
+      println('Contoh: /workflow refine btc_alert "tambahkan delay 5 detik sebelum kirim"');
+      return;
+    }
+    const existing = getWorkflow(_currentTenant, id);
+    if (!existing) { println(`✗ Workflow "${id}" tidak ada.`); return; }
+
+    println(`⏳ AI sedang memodifikasi workflow "${id}"...`);
+    try {
+      const { refineWorkflow, formatWorkflowSummary } = require('./workflow_ai');
+      const { wf } = await refineWorkflow(existing, inst, _currentTenant);
+
+      println('─'.repeat(50) + formatWorkflowSummary(wf) + '─'.repeat(50));
+
+      const confirm = (await ask(' Simpan perubahan ini? (y/N): ')).trim().toLowerCase();
+      if (confirm !== 'y' && confirm !== 'ya') { println('Dibatalkan.'); return; }
+
+      saveWorkflow(_currentTenant, wf);
+      println(`✓ Workflow "${id}" diperbarui.`);
+    } catch (e) {
+      println(`✗ Refine error: ${e.message}`);
+    }
+    return;
+  }
+
+  // ── template — browse + install templates ────────────────
+  if (sub === 'template') {
+    const { listTemplates, getTemplate, installTemplate } = require('./workflow_templates');
+    const tsub = args[1];
+
+    if (!tsub || tsub === 'list') {
+      const tmpls = listTemplates();
+      let out = `TEMPLATE — ${tmpls.length} workflow siap pakai\n` + '─'.repeat(54) + '\n';
+      tmpls.forEach((t, i) => {
+        out += `  ${i + 1}. ${t.name}\n`;
+        out += `     ${t.description}\n`;
+        out += `     ID: ${t.id}  Tags: ${t.tags.join(', ')}\n\n`;
+      });
+      out += '─'.repeat(54) + '\nInstall: /workflow template install <template-id>';
+      println(out);
+      return;
+    }
+
+    if (tsub === 'install') {
+      const tmpls  = listTemplates();
+      let tmplId   = args[2];
+
+      // Interactive picker if no ID given
+      if (!tmplId) {
+        const pick = await ui.selectMenu('TEMPLATE — Pilih workflow', tmpls.map(t => ({
+          label: t.name,
+          desc:  t.description.slice(0, 60),
+        })));
+        if (pick === null) { println('Dibatalkan.'); return; }
+        tmplId = tmpls[pick].id;
+      }
+
+      const tmpl = getTemplate(tmplId);
+      if (!tmpl) { println(`✗ Template "${tmplId}" tidak ditemukan.`); return; }
+
+      println(`\nTemplate: ${tmpl.name}\n${tmpl.description}\nTags: ${tmpl.tags.join(', ')}\n`);
+
+      // Collect template-specific variables
+      const vars = {};
+      if (tmplId === 'weather_report' || tmplId === 'multi_city_weather') {
+        if (tmplId === 'weather_report') {
+          vars.city = (await ask(' Nama kota (default: Jakarta): ')).trim() || 'Jakarta';
+        } else {
+          const raw = (await ask(' Daftar kota pisah koma (default: Jakarta,Surabaya,Bandung): ')).trim();
+          vars.cities = raw ? raw.split(',').map(s => s.trim()) : undefined;
+        }
+      } else if (tmplId === 'ai_auto_reply') {
+        vars.keyword = (await ask(' Keyword trigger (default: tanya bima): ')).trim() || 'tanya bima';
+      } else if (tmplId === 'web_monitor') {
+        vars.url = (await ask(' URL yang dipantau: ')).trim();
+      } else if (tmplId === 'file_to_wa') {
+        vars.path = (await ask(' Path folder yang dipantau (default: ~/bima-inbox): ')).trim() || '~/bima-inbox';
+      }
+
+      const newId = (await ask(` ID workflow (default: ${tmplId}): `)).trim() || tmplId;
+
+      try {
+        const wf = installTemplate(tmplId, _currentTenant, newId, vars);
+        const { renderWorkflow } = require('./workflow_view');
+        println(renderWorkflow(wf));
+        println(`✓ Template "${wf.name}" berhasil diinstall sebagai "${wf.id}" (nonaktif).`);
+        println(`Aktifkan: /workflow enable ${wf.id}`);
+      } catch (e) {
+        println(`✗ Gagal install: ${e.message}`);
+      }
+      return;
+    }
+
+    println('Subcommand: template list | template install [id]');
+    return;
+  }
+
+  // ── export — save workflow to JSON file ───────────────────
+  if (sub === 'export') {
+    const id   = args[1];
+    const file = args[2];
+    if (!id) { println('Contoh: /workflow export <id> [file.json]'); return; }
+    const wf = getWorkflow(_currentTenant, id);
+    if (!wf) { println(`✗ Workflow "${id}" tidak ada.`); return; }
+
+    const outPath = file
+      ? path.resolve(file)
+      : path.join(os.homedir(), `bima_workflow_${id}.json`);
+
+    try {
+      fs.writeFileSync(outPath, JSON.stringify(wf, null, 2));
+      println(`✓ Workflow "${id}" diekspor ke:\n  ${outPath}`);
+    } catch (e) {
+      println(`✗ Gagal ekspor: ${e.message}`);
+    }
+    return;
+  }
+
+  // ── import — load workflow from JSON file or URL ──────────
+  if (sub === 'import') {
+    const source = args[1];
+    if (!source) { println('Contoh: /workflow import <file.json>\n        /workflow import https://...'); return; }
+
+    println(`⏳ Mengimpor dari: ${source}`);
+    let raw;
+    try {
+      if (source.startsWith('http://') || source.startsWith('https://')) {
+        const res = await fetch(source, { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        raw = await res.text();
+      } else {
+        const p = path.resolve(source);
+        if (!fs.existsSync(p)) throw new Error(`File tidak ditemukan: ${p}`);
+        raw = fs.readFileSync(p, 'utf8');
+      }
+    } catch (e) {
+      println(`✗ Gagal baca sumber: ${e.message}`);
+      return;
+    }
+
+    let wf;
+    try { wf = JSON.parse(raw); }
+    catch (e) { println(`✗ JSON tidak valid: ${e.message}`); return; }
+
+    // Validate
+    try {
+      const { validateWorkflow } = require('./workflow_ai');
+      validateWorkflow(wf);
+    } catch (e) {
+      println(`⚠ Validasi gagal: ${e.message}\nLanjutkan tetap? (y/N)`);
+      const cont = (await ask('')).trim().toLowerCase();
+      if (cont !== 'y' && cont !== 'ya') { println('Dibatalkan.'); return; }
+    }
+
+    // Show preview
+    const { renderWorkflow } = require('./workflow_view');
+    println(renderWorkflow(wf));
+
+    // Check duplicate
+    const existing = getWorkflow(_currentTenant, wf.id);
+    if (existing) {
+      const overwrite = (await ask(` ! Workflow "${wf.id}" sudah ada. Timpa? (y/N): `)).trim().toLowerCase();
+      if (overwrite !== 'y' && overwrite !== 'ya') {
+        const newId = (await ask(' ID baru: ')).trim();
+        if (!newId) { println('Dibatalkan.'); return; }
+        wf.id = newId;
+      }
+    }
+
+    wf.tenant    = _currentTenant;
+    wf.enabled   = false;
+    wf.updatedAt = Date.now();
+    if (!wf.createdAt) wf.createdAt = Date.now();
+
+    saveWorkflow(_currentTenant, wf);
+    println(`✓ Workflow "${wf.id}" berhasil diimport (nonaktif).\nAktifkan: /workflow enable ${wf.id}`);
+    return;
+  }
+
+  // ── clone — duplicate workflow ────────────────────────────
+  if (sub === 'clone') {
+    const srcId = args[1];
+    const dstId = args[2];
+    if (!srcId) { println('Contoh: /workflow clone <id-asal> <id-baru>'); return; }
+
+    const src = getWorkflow(_currentTenant, srcId);
+    if (!src) { println(`✗ Workflow "${srcId}" tidak ada.`); return; }
+
+    const newId = dstId || (srcId + '_copy');
+    if (getWorkflow(_currentTenant, newId)) {
+      println(`✗ Workflow "${newId}" sudah ada. Pilih ID lain.`); return;
+    }
+
+    const clone = {
+      ...JSON.parse(JSON.stringify(src)), // deep copy
+      id:        newId,
+      enabled:   false,
+      tenant:    _currentTenant,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    saveWorkflow(_currentTenant, clone);
+    println(`✓ Workflow "${srcId}" dikloning ke "${newId}" (nonaktif).`);
+    return;
+  }
+
+  // ── history — show past runs ─────────────────────────────
+  if (sub === 'history') {
+    const id    = args[1];
+    const limit = parseInt(args[2]) || 15;
+    if (!id) { println('Contoh: /workflow history <id> [jumlah]'); return; }
+
+    const { getRunHistory, getRunStats } = require('./workflow');
+    const runs  = getRunHistory(_currentTenant, id, limit);
+    const stats = getRunStats(_currentTenant, id);
+
+    if (!runs.length) { println(`Belum ada riwayat run untuk "${id}".`); return; }
+
+    let out = `HISTORY — ${id}  (${runs.length} run terakhir)\n` + '─'.repeat(54) + '\n';
+
+    if (stats) {
+      out += `  Total: ${stats.total}  ✓ ${stats.success}  ✗ ${stats.failed}`;
+      out += `  Success: ${stats.successRate}%  Avg: ${stats.avgMs}ms\n`;
+      out += '─'.repeat(54) + '\n';
+    }
+
+    runs.forEach(r => {
+      const date = new Date(r.startedAt).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' });
+      const icon = r.ok ? '✓' : '✗';
+      const trg  = r.trigger ? `[${r.trigger}]` : '';
+      out += `  ${icon} ${date}  ${r.durationMs}ms  ${trg}`;
+      if (!r.ok && r.failedNode) out += `  node: ${r.failedNode}`;
+      if (!r.ok && r.error)      out += `\n    ! ${r.error.slice(0, 80)}`;
+      out += '\n';
+    });
+
+    out += '─'.repeat(54);
+    println(out);
+    return;
+  }
+
+  // ── stats — success rate + monitoring overview ────────────
+  if (sub === 'stats') {
+    const { getRunStats } = require('./workflow');
+    const workflows = listWorkflows(_currentTenant);
+
+    if (!workflows.length) { println('Belum ada workflow.'); return; }
+
+    let out = `STATS — ${workflows.length} workflow\n` + '─'.repeat(54) + '\n';
+    out += `  ${'ID'.padEnd(22)} ${'Status'.padEnd(10)} ${'Runs'.padEnd(6)} ${'OK%'.padEnd(6)} ${'AvgMs'}\n`;
+    out += '  ' + '─'.repeat(50) + '\n';
+
+    for (const wf of workflows) {
+      const st    = wf.enabled ? '● aktif' : '○ off';
+      const stats = getRunStats(_currentTenant, wf.id);
+      if (!stats) {
+        out += `  ${wf.id.padEnd(22)} ${st.padEnd(10)} ${'—'.padEnd(6)} ${'—'.padEnd(6)} —\n`;
+      } else {
+        out += `  ${wf.id.padEnd(22)} ${st.padEnd(10)} ${String(stats.total).padEnd(6)} ${(stats.successRate + '%').padEnd(6)} ${stats.avgMs}ms\n`;
+      }
+    }
+
+    out += '─'.repeat(54);
+    println(out);
+    return;
+  }
+
+  // ── sandbox — toggle shell execution ─────────────────────
+  if (sub === 'sandbox') {
+    const val = args[1];
+    if (!val) {
+      const cfg = getConfig(_currentTenant);
+      println(`Sandbox: ${cfg.sandboxEnabled ? '● aktif' : '○ nonaktif'}\nToggle: /workflow sandbox on|off`);
+      return;
+    }
+    if (val === 'on') {
+      saveConfig({ sandboxEnabled: true }, _currentTenant);
+      println('✓ Sandbox aktif — node shell dapat menjalankan perintah OS.\n! Pastikan workflow dari sumber terpercaya!');
+    } else if (val === 'off') {
+      saveConfig({ sandboxEnabled: false }, _currentTenant);
+      println('✓ Sandbox dinonaktifkan.');
+    } else {
+      println('Contoh: /workflow sandbox on  atau  /workflow sandbox off');
+    }
+    return;
+  }
+
+  println('Subcommand:\n  list | view <id> | run <id> [input] | info <id>\n  history <id> [n] | stats\n  enable <id> | disable <id> | del <id>\n  create | ai "<deskripsi>" | refine <id> "<instruksi>"\n  template list|install [id]\n  export <id> [file] | import <file|url> | clone <id> [new-id]\n  sandbox on|off');
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1218,6 +1927,21 @@ async function main() {
     if (proxy)   ui.log('INFO', 'nano-proxy aktif ✓');
   }).catch(() => {});
 
+  // Auto-start scheduled workflows
+  setTimeout(() => {
+    try {
+      const { startScheduledWorkflows } = require('./workflow');
+      const { listTenants: lT } = require('./tenant');
+      const allTenants = lT().map(t => t.id);
+      if (!allTenants.includes('default')) allTenants.push('default');
+      let total = 0;
+      for (const tid of allTenants) {
+        total += startScheduledWorkflows(tid, { _tenantId: tid }, log);
+      }
+      if (total > 0) ui.log('WF', `${total} workflow terjadwal aktif ✓`);
+    } catch {}
+  }, 4000);
+
   // Auto-connect WA if session exists
   const authDir = process.env.BIMA_DATA
     ? path.join(process.env.BIMA_DATA, 'auth')
@@ -1271,6 +1995,10 @@ async function main() {
       else if (line === '/blacklist' || line.startsWith('/blacklist ')) {
         const parts = line.slice(10).trim().split(/\s+/).filter(Boolean);
         cmdBlacklist(parts);
+      }
+      else if (line === '/workflow' || line.startsWith('/workflow ')) {
+        const parts = line.slice(9).trim().split(/\s+/).filter(Boolean);
+        await cmdWorkflow(parts);
       }
       else if (line === '/compact')        { await cmdCompact(); }
       else if (line === '/stt')            { await cmdSTT(); }

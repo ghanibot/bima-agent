@@ -124,6 +124,7 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:.8rem;color:#94a3b8;bac
   <button onclick="showTab('send',this)">&#128172; Kirim Pesan</button>
   <button onclick="showTab('kb',this)">&#128218; Knowledge Base</button>
   <button onclick="showTab('log',this)">&#128203; Log Grup</button>
+  <button onclick="showTab('wf',this);loadWorkflows()">&#9654; Workflow</button>
 </nav>
 <main>
 
@@ -212,6 +213,34 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:.8rem;color:#94a3b8;bac
     <div class="loading" id="log-loading" style="display:none">Memuat log...</div>
     <div id="log-meta" style="font-size:.8rem;color:#64748b;margin-top:8px"></div>
     <pre id="log-result" style="display:none;margin-top:10px"></pre>
+  </div>
+</div>
+
+
+<!-- WORKFLOW TAB -->
+<div class="tab" id="tab-wf">
+  <div class="card">
+    <h2>Workflow</h2>
+    <button class="btn secondary" onclick="loadWorkflows()">&#8635; Refresh</button>
+    <div id="wf-loading" class="loading" style="margin-top:8px">Memuat...</div>
+    <table id="wf-table" style="margin-top:12px;display:none">
+      <thead>
+        <tr>
+          <th>ID</th><th>Nama</th><th>Trigger</th><th>Nodes</th>
+          <th>Runs</th><th>OK%</th><th>Status</th><th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody id="wf-body"></tbody>
+    </table>
+  </div>
+  <div class="card" id="wf-runs-card" style="display:none">
+    <h2>Riwayat Run: <span id="wf-runs-title"></span></h2>
+    <button class="btn secondary" style="float:right;margin-top:-30px" onclick="document.getElementById('wf-runs-card').style.display='none'">&#10005; Tutup</button>
+    <div id="wf-runs-stats" style="margin-bottom:10px;color:#94a3b8;font-size:.8rem"></div>
+    <table>
+      <thead><tr><th>Waktu</th><th>Status</th><th>Durasi</th><th>Trigger</th><th>Error</th></tr></thead>
+      <tbody id="wf-runs-body"></tbody>
+    </table>
   </div>
 </div>
 
@@ -424,6 +453,112 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Workflow tab ───────────────────────────────────────────────
+async function loadWorkflows() {
+  document.getElementById('wf-loading').style.display = 'block';
+  document.getElementById('wf-table').style.display   = 'none';
+  try {
+    var r = await fetch('/api/workflows', { headers: headers() });
+    var d = await r.json();
+    document.getElementById('wf-loading').style.display = 'none';
+    if (!r.ok) { document.getElementById('wf-loading').textContent = 'Error: ' + d.error; return; }
+
+    var tbody = document.getElementById('wf-body');
+    tbody.innerHTML = '';
+    if (!d.workflows.length) {
+      tbody.innerHTML = '<tr><td colspan="8" style="color:#64748b">Belum ada workflow. Buat via CLI: /workflow create</td></tr>';
+    } else {
+      d.workflows.forEach(function(wf) {
+        var trg = wf.trigger ? (wf.trigger.type + (wf.trigger.interval ? '/' + wf.trigger.interval : '') + (wf.trigger.match ? '/' + esc(wf.trigger.match) : '')) : '-';
+        var stats = wf.stats;
+        var enabledClass = wf.enabled ? 'green' : '';
+        var statusLabel  = wf.enabled ? '● aktif' : '○ off';
+        tbody.innerHTML += '<tr>' +
+          '<td><code>' + esc(wf.id) + '</code></td>' +
+          '<td>' + esc(wf.name) + '</td>' +
+          '<td style="font-size:.75rem;color:#94a3b8">' + trg + '</td>' +
+          '<td style="text-align:center">' + wf.nodeCount + '</td>' +
+          '<td style="text-align:center">' + (stats ? stats.total : '-') + '</td>' +
+          '<td style="text-align:center">' + (stats ? stats.successRate + '%' : '-') + '</td>' +
+          '<td class="value ' + enabledClass + '" style="font-size:.8rem">' + statusLabel + '</td>' +
+          '<td>' +
+            '<button class="btn secondary" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="triggerRun(\'' + esc(wf.id) + '\')">&#9654; Run</button>' +
+            '<button class="btn secondary" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="showRuns(\'' + esc(wf.id) + '\')">&#128203; History</button>' +
+            (wf.enabled
+              ? '<button class="btn danger" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="toggleWf(\'' + esc(wf.id) + '\',false)">Stop</button>'
+              : '<button class="btn" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="toggleWf(\'' + esc(wf.id) + '\',true)">Start</button>'
+            ) +
+          '</td>' +
+        '</tr>';
+      });
+    }
+    document.getElementById('wf-table').style.display = 'table';
+  } catch(e) {
+    document.getElementById('wf-loading').textContent = 'Gagal memuat: ' + e.message;
+  }
+}
+
+async function triggerRun(id) {
+  if (!confirm('Jalankan workflow "' + id + '"?')) return;
+  try {
+    var r = await fetch('/api/workflows/' + encodeURIComponent(id) + '/run', { method: 'POST', headers: headers(), body: '{}' });
+    var d = await r.json();
+    if (r.ok) {
+      alert((d.run ? (d.run.ok ? '✓ Selesai — ' + d.run.durationMs + 'ms' : '✗ Gagal: ' + d.run.error) : d.message) || 'Done');
+      loadWorkflows();
+    } else { alert('Error: ' + d.error); }
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function toggleWf(id, enable) {
+  var action = enable ? 'enable' : 'disable';
+  try {
+    var r = await fetch('/api/workflows/' + encodeURIComponent(id) + '/' + action, { method: 'PUT', headers: headers() });
+    var d = await r.json();
+    if (r.ok) loadWorkflows();
+    else alert('Error: ' + d.error);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function showRuns(id) {
+  var card = document.getElementById('wf-runs-card');
+  document.getElementById('wf-runs-title').textContent = id;
+  document.getElementById('wf-runs-body').innerHTML = '<tr><td colspan="5" style="color:#64748b">Memuat...</td></tr>';
+  card.style.display = 'block';
+  card.scrollIntoView({ behavior: 'smooth' });
+  try {
+    var r = await fetch('/api/workflows/' + encodeURIComponent(id) + '/runs?limit=30', { headers: headers() });
+    var d = await r.json();
+    if (!r.ok) { document.getElementById('wf-runs-body').innerHTML = '<tr><td colspan="5">Error: ' + esc(d.error) + '</td></tr>'; return; }
+
+    if (d.stats) {
+      document.getElementById('wf-runs-stats').textContent =
+        'Total: ' + d.stats.total + '  Sukses: ' + d.stats.success + '  Gagal: ' + d.stats.failed +
+        '  Rate: ' + d.stats.successRate + '%  Avg: ' + d.stats.avgMs + 'ms';
+    }
+
+    var tbody = document.getElementById('wf-runs-body');
+    tbody.innerHTML = '';
+    if (!d.runs.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="color:#64748b">Belum ada riwayat run.</td></tr>';
+    } else {
+      d.runs.forEach(function(run) {
+        var dt    = new Date(run.startedAt).toLocaleString('id-ID');
+        var stCol = run.ok ? '<span style="color:#22c55e">✓ OK</span>' : '<span style="color:#ef4444">✗ Gagal</span>';
+        tbody.innerHTML += '<tr>' +
+          '<td style="font-size:.75rem;white-space:nowrap">' + dt + '</td>' +
+          '<td>' + stCol + '</td>' +
+          '<td>' + run.durationMs + 'ms</td>' +
+          '<td style="color:#94a3b8;font-size:.75rem">' + esc(run.trigger || '-') + '</td>' +
+          '<td style="color:#ef4444;font-size:.75rem">' + esc(run.error ? run.error.slice(0,80) : '') + '</td>' +
+        '</tr>';
+      });
+    }
+  } catch(e) {
+    document.getElementById('wf-runs-body').innerHTML = '<tr><td colspan="5">Error: ' + e.message + '</td></tr>';
+  }
+}
+
 loadStatus();
 </script>
 </body>
@@ -554,6 +689,126 @@ async function handleRequest(req, res) {
   if (route === '/api/ltm' && method === 'GET') {
     const { getAll } = require('./ltm');
     send(res, 200, { ok: true, entries: getAll(_tenantId()) });
+    return;
+  }
+
+  // ── Workflow REST API ─────────────────────────────────────
+
+  // GET /api/workflows
+  if (route === '/api/workflows' && method === 'GET') {
+    if (!auth(req, res)) return;
+    const { listWorkflows, getRunStats } = require('./workflow');
+    const workflows = listWorkflows(_tenantId()).map(wf => ({
+      id:          wf.id,
+      name:        wf.name,
+      description: wf.description || '',
+      enabled:     wf.enabled,
+      trigger:     wf.trigger,
+      nodeCount:   (wf.nodes || []).length,
+      entry:       wf.entry,
+      updatedAt:   wf.updatedAt,
+      stats:       getRunStats(_tenantId(), wf.id),
+    }));
+    send(res, 200, { ok: true, workflows });
+    return;
+  }
+
+  // GET /api/workflows/:id
+  if (route.startsWith('/api/workflows/') && !route.includes('/runs') && !route.includes('/run') && method === 'GET') {
+    if (!auth(req, res)) return;
+    const wfId = route.slice(15);
+    const { getWorkflow } = require('./workflow');
+    const wf = getWorkflow(_tenantId(), wfId);
+    if (!wf) { send(res, 404, { error: 'Workflow tidak ditemukan' }); return; }
+    send(res, 200, { ok: true, workflow: wf });
+    return;
+  }
+
+  // GET /api/workflows/:id/runs
+  if (route.match(/^\/api\/workflows\/[^/]+\/runs$/) && method === 'GET') {
+    if (!auth(req, res)) return;
+    const wfId = route.split('/')[3];
+    const limit = parseInt(searchParams.get('limit') || '20');
+    const { getRunHistory, getRunStats } = require('./workflow');
+    const runs  = getRunHistory(_tenantId(), wfId, limit);
+    const stats = getRunStats(_tenantId(), wfId);
+    send(res, 200, { ok: true, runs, stats });
+    return;
+  }
+
+  // POST /api/workflows/:id/run  — manual trigger
+  if (route.match(/^\/api\/workflows\/[^/]+\/run$/) && method === 'POST') {
+    if (!auth(req, res)) return;
+    const wfId = route.split('/')[3];
+    const { getWorkflow, runWorkflow } = require('./workflow');
+    const wf = getWorkflow(_tenantId(), wfId);
+    if (!wf) { send(res, 404, { error: 'Workflow tidak ditemukan' }); return; }
+    try {
+      const body    = await readBody(req);
+      const input   = body.input || '';
+      const sendFn  = _sendMsg ? async (jid, text) => _sendMsg(jid, text) : null;
+      // Run async, respond immediately with run start info
+      const runP = runWorkflow(wf, {
+        _tenantId:  _tenantId(),
+        _jid:       body.jid || null,
+        _sendFn:    sendFn,
+        _trigger:   'api',
+        lastOutput: input,
+        message:    input,
+        input,
+      }, null);
+      // Wait max 5s for quick workflows, else return "accepted"
+      const run = await Promise.race([
+        runP,
+        new Promise(r => setTimeout(() => r(null), 5000)),
+      ]);
+      if (run) {
+        send(res, 200, { ok: true, run: { ok: run.ok, durationMs: run.durationMs, steps: run.steps.length, error: run.error } });
+      } else {
+        send(res, 202, { ok: true, message: 'Workflow sedang berjalan (timeout 5s terlampaui)' });
+      }
+    } catch (e) { send(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // PUT /api/workflows/:id/enable
+  if (route.match(/^\/api\/workflows\/[^/]+\/enable$/) && method === 'PUT') {
+    if (!auth(req, res)) return;
+    const wfId = route.split('/')[3];
+    const { getWorkflow, saveWorkflow, activateTriggers } = require('./workflow');
+    const wf = getWorkflow(_tenantId(), wfId);
+    if (!wf) { send(res, 404, { error: 'Workflow tidak ditemukan' }); return; }
+    wf.enabled = true;
+    saveWorkflow(_tenantId(), wf);
+    activateTriggers(_tenantId(), wf, { _tenantId: _tenantId() }, null);
+    send(res, 200, { ok: true, id: wfId, enabled: true });
+    return;
+  }
+
+  // PUT /api/workflows/:id/disable
+  if (route.match(/^\/api\/workflows\/[^/]+\/disable$/) && method === 'PUT') {
+    if (!auth(req, res)) return;
+    const wfId = route.split('/')[3];
+    const { getWorkflow, saveWorkflow, deactivateTriggers } = require('./workflow');
+    const wf = getWorkflow(_tenantId(), wfId);
+    if (!wf) { send(res, 404, { error: 'Workflow tidak ditemukan' }); return; }
+    wf.enabled = false;
+    saveWorkflow(_tenantId(), wf);
+    deactivateTriggers(_tenantId(), wfId);
+    send(res, 200, { ok: true, id: wfId, enabled: false });
+    return;
+  }
+
+  // POST /webhook/:webhookId  — workflow webhook trigger
+  if (method === 'POST' && route.startsWith('/webhook/')) {
+    const webhookId = route.slice(9); // strip '/webhook/'
+    if (!webhookId) { send(res, 400, { error: 'Butuh webhookId' }); return; }
+    try {
+      const body = await readBody(req);
+      const { handleWebhookTrigger } = require('./workflow');
+      const result = await handleWebhookTrigger(webhookId, body, req.headers, _sendMsg, null);
+      send(res, result.status, result);
+    } catch (e) { send(res, 500, { error: e.message }); }
     return;
   }
 

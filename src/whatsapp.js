@@ -245,7 +245,17 @@ async function startWA(logger) {
     };
     sock.ev.on('groups.upsert',             scheduleGroupReload);
     sock.ev.on('groups.update',             scheduleGroupReload);
-    sock.ev.on('group-participants.update', scheduleGroupReload);
+    sock.ev.on('group-participants.update', async (update) => {
+      scheduleGroupReload();
+      // Fire workflow group_event triggers
+      try {
+        const { handleGroupEvent } = require('./workflow');
+        const { resolveTenant } = require('./tenant');
+        const tenantId = resolveTenant(update.id, null);
+        const sendFn   = async (jid, text) => sendMsg(jid, text);
+        await handleGroupEvent(tenantId, update.id, update.participants || [], update.action || 'add', sendFn, logFn);
+      } catch {}
+    });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
@@ -465,6 +475,18 @@ async function handleMsg(msg) {
     return;
   }
 
+  // ── Workflow wa.message triggers (non-exclusive = run alongside AI) ──
+  if (text) {
+    try {
+      const { handleWATrigger } = require('./workflow');
+      const sendFn = async (targetJid, txt) => sendMsg(targetJid, txt);
+      const exclusive = await handleWATrigger(tenantId, jid, sender, text, sendFn, logFn);
+      if (exclusive) return;
+    } catch (e) {
+      logFn('DEBUG', `Workflow trigger skip: ${e.message}`);
+    }
+  }
+
   if (isMention || isReply || hasTrigger || isChained) {
     logFn('QUERY', `[${jid}][${tenantId}] ${text.slice(0, 80)}`);
 
@@ -493,6 +515,31 @@ async function handleMsg(msg) {
       }
     } catch (e) {
       logFn('DEBUG', `Guard scan skip: ${e.message}`);
+    }
+
+    // ── Workflow builder intent ───────────────────────────
+    const isWorkflowBuild = /\b(buatkan?|buat|generate|bikin|create)\s+(workflow|alur|otomasi|automation)\b/i.test(text)
+      || /\bworkflow\s+(yang|untuk|buat)\b/i.test(text);
+    if (isWorkflowBuild) {
+      try {
+        await sendMsg(jid, '_Sedang membuat workflow... sebentar ya!_', msg);
+        const { buildWorkflowFromDescription, formatWorkflowSummary } = require('./workflow_ai');
+        const { saveWorkflow } = require('./workflow');
+        const { wf } = await buildWorkflowFromDescription(text, tenantId);
+        wf.tenant = tenantId;
+        saveWorkflow(tenantId, wf);
+        const summary = formatWorkflowSummary(wf);
+        await sendMsg(jid,
+          `*Workflow berhasil dibuat!* ✓\n${summary}\n` +
+          `_Status: nonaktif. Aktifkan via CLI: /workflow enable ${wf.id}_`,
+          msg
+        );
+        logFn('WF', `AI built workflow "${wf.id}" for tenant ${tenantId}`);
+      } catch (e) {
+        await sendMsg(jid, `Gagal membuat workflow: ${e.message}`, msg);
+      }
+      addToChain(jid, sender);
+      return;
     }
 
     // ── Summary intent: rekap/summary grup ───────────────
