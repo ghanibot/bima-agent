@@ -240,13 +240,14 @@ function ask(question) {
     const prevPickerActive = _pickerActive;
     _pickerActive = true;
 
-    // Steal keypress listeners — prevents _rl from echoing while tmp reads.
-    // Never pause stdin (that blocks tmp from receiving data).
+    // Pause _rl agar tidak double-echo input saat ask() aktif
+    try { if (_rl) _rl.pause(); } catch {}
+
     const savedKeypress = process.stdin.rawListeners('keypress');
     process.stdin.removeAllListeners('keypress');
     if (process.stdin.isTTY) process.stdin.setRawMode(false);
 
-    // terminal:false → tmp uses data events, no keypress/echo conflict with _rl
+    // terminal:false → tmp uses data events, tidak ada keypress/echo conflict
     const tmp = readline.createInterface({
       input: process.stdin, output: process.stdout, terminal: false,
     });
@@ -258,6 +259,13 @@ function ask(question) {
       try { tmp.close(); } catch {}
       try { if (process.stdin.isTTY) process.stdin.setRawMode(true); } catch {}
       savedKeypress.forEach(l => { try { process.stdin.on('keypress', l); } catch {} });
+      // Resume _rl dan bersihkan sisa buffer
+      try {
+        if (_rl) {
+          _rl.resume();
+          if (_rl.line) _rl.write(null, { ctrl: true, name: 'u' });
+        }
+      } catch {}
       _pickerActive = prevPickerActive;
       if (!_pickerActive) _flushLogs();
       resolve(ans);
@@ -272,10 +280,34 @@ function ask(question) {
 function _stealKeypress(handler) {
   const saved = process.stdin.rawListeners('keypress');
   process.stdin.removeAllListeners('keypress');
-  process.stdin.on('keypress', handler);
+
+  // Debounce wrapper — cegah double-fire dalam 60ms (key repeat OS)
+  let _lastKeyMs = 0;
+  function debounced(ch, key) {
+    const now = Date.now();
+    if (now - _lastKeyMs < 60) return;
+    _lastKeyMs = now;
+    handler(ch, key);
+  }
+
+  process.stdin.on('keypress', debounced);
+
+  // Pause _rl agar tidak buffering input saat picker aktif
+  try { if (_rl) _rl.pause(); } catch {}
+
   return function restore() {
     process.stdin.removeAllListeners('keypress');
     saved.forEach(l => process.stdin.on('keypress', l));
+    // Resume _rl dan bersihkan buffer yang mungkin tertampung
+    try {
+      if (_rl) {
+        _rl.resume();
+        // Buang karakter yang sempat masuk ke buffer _rl selama picker
+        if (_rl.line) {
+          _rl.write(null, { ctrl: true, name: 'u' });
+        }
+      }
+    } catch {}
   };
 }
 
@@ -610,7 +642,12 @@ function selectMenu(title, items, opts = {}) {
         default:
           if (ch && /^[0-9]$/.test(ch) && !key.ctrl && !key.meta) {
             const n = parseInt(ch) === 0 ? 10 : parseInt(ch);
-            if (n >= 1 && n <= norm.length) { selIdx = n - 1; draw(); }
+            if (n >= 1 && n <= norm.length) {
+              selIdx = n - 1;
+              draw();
+              // Langsung confirm — tidak perlu tekan Enter lagi
+              setTimeout(() => done(selIdx), 120);
+            }
           }
       }
     }
