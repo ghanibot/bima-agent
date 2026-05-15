@@ -205,6 +205,63 @@ const TEMPLATES = [
   },
 
   {
+    id:          'voice_to_ai_reply',
+    name:        'Voice Note → AI → Reply',
+    description: 'Transkripsi voice note user, jawab dengan AI, balas teks',
+    tags:        ['wa.message', 'audio', 'ai'],
+    build: () => ({
+      trigger: { type: 'wa.message', onMedia: 'audio', mediaOnly: true, exclusive: true },
+      entry:   'transcribe',
+      nodes: [
+        {
+          id: 'transcribe', type: 'wa.transcribe',
+          config: { source: 'trigger' },
+          retry: { times: 1, backoff: 'fixed', delayMs: 1500 },
+          next: 'think',
+        },
+        {
+          id: 'think', type: 'ai.call',
+          config: {
+            prompt: 'User mengirim voice note: "{{lastOutput}}"\n\nJawab dengan singkat dan jelas.',
+            system: 'Kamu Bima, asisten AI WhatsApp Indonesia. Jawab singkat dan informatif.',
+          },
+          retry: { times: 1, backoff: 'exponential', delayMs: 1000 },
+          next: 'reply',
+        },
+        {
+          id: 'reply', type: 'wa.send',
+          config: { text: '🎙 Transkrip: _"{{transcribe_output}}"_\n\n🤖 {{lastOutput}}' },
+          next: null,
+        },
+      ],
+    }),
+  },
+
+  {
+    id:          'image_to_description',
+    name:        'Foto → Deskripsi AI',
+    description: 'User kirim foto, AI deskripsikan/jawab pertanyaan tentang isi gambar',
+    tags:        ['wa.message', 'image', 'ai', 'vision'],
+    build: () => ({
+      trigger: { type: 'wa.message', onMedia: 'image', mediaOnly: true, exclusive: true },
+      entry:   'see',
+      nodes: [
+        {
+          id: 'see', type: 'wa.vision',
+          config: { source: 'trigger', question: '{{message}}' },
+          retry: { times: 1, backoff: 'fixed', delayMs: 2000 },
+          next: 'reply',
+        },
+        {
+          id: 'reply', type: 'wa.send',
+          config: { text: '👁 {{lastOutput}}' },
+          next: null,
+        },
+      ],
+    }),
+  },
+
+  {
     id:          'multi_city_weather',
     name:        'Cuaca Banyak Kota (Loop)',
     description: 'Ambil cuaca beberapa kota sekaligus, kirim rekapnya',

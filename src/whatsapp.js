@@ -211,10 +211,23 @@ async function startWA(logger) {
         logFn('WA', `Terhubung sebagai ${botName} | id=${botId} | lid=${lid || '-'}`);
         logFn('DEBUG', `Bot identities: ${[...botIdentities].join(', ')}`);
         await loadGroups();
+
+        // Register system-wide senders so scheduled/file/webhook workflows can send WA messages + media
+        try {
+          const { setSystemSenders } = require('./workflow');
+          setSystemSenders({
+            sendFn:      async (jid, text) => sendMsg(jid, text),
+            sendMediaFn: async (jid, mediaObj) => sock.sendMessage(jid, mediaObj),
+          });
+        } catch {}
       }
 
       if (connection === 'close') {
         state.connected = false;
+        try {
+          const { setSystemSenders } = require('./workflow');
+          setSystemSenders({ sendFn: null, sendMediaFn: null });
+        } catch {}
         const code        = lastDisconnect?.error?.output?.statusCode;
         const isLoggedOut = code === DisconnectReason.loggedOut;
         const isReplaced  = code === 440; // connectionReplaced — another device took session
@@ -475,15 +488,43 @@ async function handleMsg(msg) {
     return;
   }
 
-  // ── Workflow wa.message triggers (non-exclusive = run alongside AI) ──
-  if (text) {
-    try {
-      const { handleWATrigger } = require('./workflow');
-      const sendFn = async (targetJid, txt) => sendMsg(targetJid, txt);
-      const exclusive = await handleWATrigger(tenantId, jid, sender, text, sendFn, logFn);
-      if (exclusive) return;
-    } catch (e) {
-      logFn('DEBUG', `Workflow trigger skip: ${e.message}`);
+  // ── Workflow wa.message triggers (text + media) ──
+  {
+    // Detect media type for workflow trigger
+    let mediaType = null;
+    let mediaMime = null;
+    if (msg.message?.audioMessage) {
+      mediaType = 'audio';
+      mediaMime = msg.message.audioMessage.mimetype || 'audio/ogg';
+    } else if (msg.message?.imageMessage) {
+      mediaType = 'image';
+      mediaMime = msg.message.imageMessage.mimetype || 'image/jpeg';
+    } else if (msg.message?.videoMessage) {
+      mediaType = 'video';
+      mediaMime = msg.message.videoMessage.mimetype || 'video/mp4';
+    } else if (msg.message?.documentMessage) {
+      mediaType = 'document';
+      mediaMime = msg.message.documentMessage.mimetype || 'application/octet-stream';
+    }
+
+    if (text || mediaType) {
+      try {
+        const { handleWATrigger } = require('./workflow');
+        const sendFn      = async (targetJid, txt) => sendMsg(targetJid, txt);
+        const sendMediaFn = async (targetJid, mediaObj) => sock.sendMessage(targetJid, mediaObj, { quoted: msg });
+        const downloadMedia = async (expectedType) => {
+          if (expectedType && mediaType && expectedType !== mediaType) return null;
+          const Baileys  = await import('@whiskeysockets/baileys');
+          return Baileys.downloadMediaMessage(msg, 'buffer', {});
+        };
+
+        const exclusive = await handleWATrigger(tenantId, jid, sender, text, sendFn, logFn, {
+          msg, mediaType, mediaMime, downloadMedia, sendMediaFn,
+        });
+        if (exclusive) return;
+      } catch (e) {
+        logFn('DEBUG', `Workflow trigger skip: ${e.message}`);
+      }
     }
   }
 

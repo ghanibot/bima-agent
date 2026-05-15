@@ -105,6 +105,45 @@ tr:last-child td{border-bottom:none}
 .badge.io{background:#44337a;color:#c4b5fd}
 pre{white-space:pre-wrap;word-break:break-word;font-size:.8rem;color:#94a3b8;background:#0f172a;padding:12px;border-radius:6px;max-height:400px;overflow-y:auto;border:1px solid #334155}
 .loading{color:#64748b;font-size:.85rem;margin-top:8px}
+
+/* ── Visual Builder ─────────────────────────────────────── */
+.builder-layout{display:grid;grid-template-columns:180px 1fr 240px;gap:8px;height:calc(100vh - 240px);min-height:500px}
+.builder-pane{background:#1e293b;border:1px solid #334155;border-radius:6px;overflow:auto;padding:8px}
+.builder-pane h3{font-size:.75rem;color:#94a3b8;text-transform:uppercase;margin-bottom:8px;letter-spacing:.05em}
+.palette-item{padding:6px 8px;margin-bottom:4px;background:#0f172a;border:1px solid #334155;border-radius:4px;cursor:grab;font-size:.78rem;display:flex;align-items:center;gap:6px;color:#e2e8f0;user-select:none}
+.palette-item:hover{border-color:#22c55e;background:#1a2540}
+.palette-item:active{cursor:grabbing}
+.palette-icon{width:18px;text-align:center;font-size:.95rem}
+.palette-group{font-size:.65rem;color:#64748b;margin:6px 0 3px;text-transform:uppercase;letter-spacing:.05em}
+#wf-canvas{position:relative;background:#0f172a;background-image:radial-gradient(#1e293b 1px,transparent 1px);background-size:16px 16px;overflow:auto;min-height:400px}
+.canvas-node{position:absolute;background:#1e293b;border:2px solid #334155;border-radius:8px;padding:8px 10px;min-width:120px;cursor:move;user-select:none;font-size:.8rem;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+.canvas-node.entry{border-color:#22c55e}
+.canvas-node.selected{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.3)}
+.canvas-node .node-head{display:flex;align-items:center;gap:6px;font-weight:600}
+.canvas-node .node-id{color:#e2e8f0;font-size:.78rem}
+.canvas-node .node-type{color:#94a3b8;font-size:.65rem;text-transform:uppercase;letter-spacing:.05em}
+.canvas-node .node-summary{color:#64748b;font-size:.7rem;margin-top:3px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.canvas-node .node-badges{display:flex;gap:3px;margin-top:3px;font-size:.65rem}
+.canvas-node .node-badge{background:#0f172a;border:1px solid #334155;padding:1px 4px;border-radius:3px;color:#94a3b8}
+.node-port{position:absolute;width:10px;height:10px;border-radius:50%;background:#334155;border:2px solid #1e293b;cursor:crosshair;z-index:2}
+.node-port:hover{background:#22c55e}
+.node-port.in{left:-7px;top:50%;transform:translateY(-50%)}
+.node-port.out{right:-7px;top:50%;transform:translateY(-50%)}
+.node-port.branch-true{right:-7px;top:30%}
+.node-port.branch-false{right:-7px;top:70%}
+.node-port.branch-true::after{content:'T';position:absolute;right:14px;top:-2px;font-size:.6rem;color:#22c55e}
+.node-port.branch-false::after{content:'F';position:absolute;right:14px;top:-2px;font-size:.6rem;color:#ef4444}
+#wf-canvas-svg{position:absolute;top:0;left:0;pointer-events:none;width:100%;height:100%;z-index:1}
+#wf-canvas-svg path{stroke:#475569;stroke-width:2;fill:none;pointer-events:stroke;cursor:pointer}
+#wf-canvas-svg path:hover{stroke:#ef4444}
+#wf-canvas-svg path.temp{stroke:#22c55e;stroke-dasharray:4 4}
+.inspector-field{margin-bottom:8px}
+.inspector-field label{font-size:.7rem;margin:0 0 3px}
+.inspector-field input,.inspector-field textarea,.inspector-field select{padding:5px 7px;font-size:.78rem;border-radius:4px}
+.inspector-field textarea{min-height:50px}
+.builder-toolbar{background:#1e293b;border:1px solid #334155;border-radius:6px;padding:8px;margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.builder-toolbar input{width:auto;flex:1;min-width:120px;padding:5px 8px;font-size:.78rem}
+.builder-toolbar .btn{padding:5px 12px;font-size:.78rem;margin:0}
 </style>
 </head>
 <body>
@@ -125,6 +164,7 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:.8rem;color:#94a3b8;bac
   <button onclick="showTab('kb',this)">&#128218; Knowledge Base</button>
   <button onclick="showTab('log',this)">&#128203; Log Grup</button>
   <button onclick="showTab('wf',this);loadWorkflows()">&#9654; Workflow</button>
+  <button onclick="showTab('builder',this);initBuilder()">&#128296; Builder</button>
 </nav>
 <main>
 
@@ -241,6 +281,46 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:.8rem;color:#94a3b8;bac
       <thead><tr><th>Waktu</th><th>Status</th><th>Durasi</th><th>Trigger</th><th>Error</th></tr></thead>
       <tbody id="wf-runs-body"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- BUILDER TAB (Visual Workflow Editor) -->
+<div class="tab" id="tab-builder">
+  <div class="builder-toolbar">
+    <input type="text" id="bld-id" placeholder="Workflow ID (huruf kecil, underscore)">
+    <input type="text" id="bld-name" placeholder="Nama workflow">
+    <select id="bld-trigger" onchange="updateTriggerConfig()" style="width:auto;min-width:140px">
+      <option value="manual">manual</option>
+      <option value="wa.message">wa.message</option>
+      <option value="schedule">schedule</option>
+      <option value="file">file</option>
+      <option value="webhook">webhook</option>
+      <option value="wa.group_event">wa.group_event</option>
+    </select>
+    <input type="text" id="bld-trigger-arg" placeholder="Trigger config" style="display:none">
+    <select id="bld-load" onchange="loadWfToBuilder(this.value)" style="width:auto;min-width:160px">
+      <option value="">-- Load existing --</option>
+    </select>
+    <button class="btn" onclick="saveBuilder()">&#128190; Save</button>
+    <button class="btn secondary" onclick="newBuilder()">&#128221; New</button>
+    <button class="btn secondary" onclick="testRunBuilder()">&#9654; Test Run</button>
+    <span id="bld-status" style="font-size:.75rem;color:#94a3b8;margin-left:auto"></span>
+  </div>
+
+  <div class="builder-layout">
+    <div class="builder-pane">
+      <h3>Palette</h3>
+      <div id="palette"></div>
+    </div>
+
+    <div class="builder-pane" id="wf-canvas" ondrop="onCanvasDrop(event)" ondragover="event.preventDefault()">
+      <svg id="wf-canvas-svg"></svg>
+    </div>
+
+    <div class="builder-pane">
+      <h3>Inspector</h3>
+      <div id="inspector"><div style="color:#64748b;font-size:.75rem">Pilih node untuk edit</div></div>
+    </div>
   </div>
 </div>
 
@@ -559,6 +639,559 @@ async function showRuns(id) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// VISUAL WORKFLOW BUILDER
+// ═══════════════════════════════════════════════════════════════
+var BLD = {
+  nodes: [],       // [{id, type, config, retry, timeout, branches, next, x, y, onError}]
+  entry: null,
+  trigger: { type: 'manual' },
+  selectedId: null,
+  drag: null,      // current drag-from-port state
+  initialized: false,
+};
+
+var NODE_DEFS = {
+  'wa.send':       { icon: '\u{1F4E8}', label: 'WA Send',       group: 'WhatsApp', fields: ['text'] },
+  'wa.send_to':    { icon: '\u{1F4E9}', label: 'WA Send To',    group: 'WhatsApp', fields: ['jid', 'text'] },
+  'wa.send_media': { icon: '\u{1F5BC}', label: 'WA Media',      group: 'WhatsApp', fields: ['type', 'source', 'jid', 'caption'] },
+  'wa.transcribe': { icon: '\u{1F399}', label: 'Transcribe',    group: 'WhatsApp', fields: ['source'] },
+  'wa.vision':     { icon: '\u{1F441}', label: 'Vision',        group: 'WhatsApp', fields: ['source', 'question'] },
+  'wa.read_group': { icon: '\u{1F4D6}', label: 'Read Group',    group: 'WhatsApp', fields: ['jid', 'limit'] },
+  'ai.call':       { icon: '\u{1F916}', label: 'AI Call',       group: 'AI',       fields: ['prompt', 'system'] },
+  'http.request':  { icon: '\u{1F310}', label: 'HTTP',          group: 'Data',     fields: ['url', 'method', 'body', 'extract'] },
+  'shell':         { icon: '\u{1F4BB}', label: 'Shell',         group: 'Data',     fields: ['cmd'] },
+  'transform':     { icon: '⚙',    label: 'Transform',     group: 'Data',     fields: ['expr', 'inputVar'] },
+  'json.extract':  { icon: '\u{1F50D}', label: 'JSON Extract',  group: 'Data',     fields: ['path'] },
+  'condition':     { icon: '❓',    label: 'Condition',     group: 'Flow',     fields: ['expr'], branches: true },
+  'loop':          { icon: '\u{1F501}', label: 'Loop',          group: 'Flow',     fields: ['items', 'itemVar', 'body', 'maxIterations'] },
+  'repeat':        { icon: '\u{1F502}', label: 'Repeat',        group: 'Flow',     fields: ['times', 'body'] },
+  'parallel':      { icon: '⚡',    label: 'Parallel',      group: 'Flow',     fields: ['branches'] },
+  'workflow.run':  { icon: '⛓',    label: 'Sub-WF',        group: 'Flow',     fields: ['workflowId', 'input'] },
+  'delay':         { icon: '⏳',    label: 'Delay',         group: 'Util',     fields: ['seconds'] },
+  'memory.read':   { icon: '\u{1F4DA}', label: 'Mem Read',      group: 'Util',     fields: ['turns'] },
+  'memory.write':  { icon: '\u{1F4BE}', label: 'Mem Write',     group: 'Util',     fields: ['content'] },
+  'set':           { icon: '\u{1F4CC}', label: 'Set Var',       group: 'Util',     fields: ['key', 'value'] },
+  'log':           { icon: '\u{1F4CB}', label: 'Log',           group: 'Util',     fields: ['text'] },
+};
+
+function initBuilder() {
+  if (BLD.initialized) return;
+  BLD.initialized = true;
+  renderPalette();
+  refreshBuilderLoadList();
+  bindCanvasEvents();
+}
+
+function renderPalette() {
+  var groups = {};
+  Object.keys(NODE_DEFS).forEach(function(type) {
+    var g = NODE_DEFS[type].group;
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(type);
+  });
+  var html = '';
+  Object.keys(groups).forEach(function(g) {
+    html += '<div class="palette-group">' + g + '</div>';
+    groups[g].forEach(function(type) {
+      var def = NODE_DEFS[type];
+      html += '<div class="palette-item" draggable="true" ondragstart="onPaletteDrag(event,\'' + type + '\')">' +
+              '<span class="palette-icon">' + def.icon + '</span>' +
+              '<span>' + def.label + '</span></div>';
+    });
+  });
+  document.getElementById('palette').innerHTML = html;
+}
+
+function onPaletteDrag(e, type) {
+  e.dataTransfer.setData('node-type', type);
+  e.dataTransfer.effectAllowed = 'copy';
+}
+
+function onCanvasDrop(e) {
+  e.preventDefault();
+  var type = e.dataTransfer.getData('node-type');
+  if (!type) return;
+  var canvas = document.getElementById('wf-canvas');
+  var rect = canvas.getBoundingClientRect();
+  var x = e.clientX - rect.left + canvas.scrollLeft - 60;
+  var y = e.clientY - rect.top  + canvas.scrollTop  - 20;
+  addNode(type, Math.max(0, x), Math.max(0, y));
+}
+
+function uid(type) {
+  var base = type.replace(/\./g, '_');
+  var i = 1;
+  while (BLD.nodes.find(function(n){ return n.id === base + i; })) i++;
+  return base + i;
+}
+
+function addNode(type, x, y) {
+  var def = NODE_DEFS[type];
+  var node = { id: uid(type), type: type, config: {}, next: null, x: x|0, y: y|0 };
+  if (def.branches) node.branches = { true: null, false: null };
+  BLD.nodes.push(node);
+  if (!BLD.entry) BLD.entry = node.id;
+  selectNode(node.id);
+  renderCanvas();
+}
+
+function renderCanvas() {
+  var canvas = document.getElementById('wf-canvas');
+  // Clear existing nodes (keep svg)
+  Array.from(canvas.querySelectorAll('.canvas-node')).forEach(function(n){ n.remove(); });
+  BLD.nodes.forEach(function(node) {
+    var def = NODE_DEFS[node.type] || { icon: '?', label: node.type };
+    var div = document.createElement('div');
+    div.className = 'canvas-node' + (node.id === BLD.entry ? ' entry' : '') + (node.id === BLD.selectedId ? ' selected' : '');
+    div.style.left = node.x + 'px';
+    div.style.top  = node.y + 'px';
+    div.dataset.id = node.id;
+    var summary = nodeSummary(node);
+    var badges = '';
+    if (node.retry && node.retry.times > 0) badges += '<span class="node-badge">↻' + node.retry.times + '</span>';
+    if (node.timeout) badges += '<span class="node-badge">⏱' + Math.round(node.timeout/1000) + 's</span>';
+    div.innerHTML =
+      '<div class="node-head"><span>' + def.icon + '</span><span class="node-id">' + node.id + '</span></div>' +
+      '<div class="node-type">' + node.type + '</div>' +
+      (summary ? '<div class="node-summary">' + escapeHtml(summary) + '</div>' : '') +
+      (badges ? '<div class="node-badges">' + badges + '</div>' : '') +
+      '<div class="node-port in" data-port="in" data-id="' + node.id + '"></div>' +
+      (def.branches
+        ? '<div class="node-port branch-true" data-port="true" data-id="' + node.id + '"></div>' +
+          '<div class="node-port branch-false" data-port="false" data-id="' + node.id + '"></div>'
+        : '<div class="node-port out" data-port="next" data-id="' + node.id + '"></div>');
+    canvas.appendChild(div);
+    makeDraggable(div, node);
+  });
+  drawConnections();
+}
+
+function nodeSummary(n) {
+  var c = n.config || {};
+  if (n.type === 'wa.send' || n.type === 'log') return c.text ? '"' + c.text.slice(0,30) + '"' : '';
+  if (n.type === 'wa.send_to') return (c.jid||'?').split('@')[0] + ': "' + (c.text||'').slice(0,20) + '"';
+  if (n.type === 'wa.send_media') return (c.type||'?') + ' ' + (c.source||'').slice(0,25);
+  if (n.type === 'wa.transcribe' || n.type === 'wa.vision') return 'source: ' + (c.source||'trigger');
+  if (n.type === 'ai.call') return (c.prompt||'').slice(0,30);
+  if (n.type === 'http.request') return (c.method||'GET') + ' ' + (c.url||'').slice(0,25);
+  if (n.type === 'shell') return '$ ' + (c.cmd||'').slice(0,25);
+  if (n.type === 'condition' || n.type === 'transform') return (c.expr||'').slice(0,30);
+  if (n.type === 'delay') return (c.seconds||1) + 's';
+  if (n.type === 'set') return c.key + ' = ' + String(c.value||'').slice(0,15);
+  if (n.type === 'workflow.run') return '→ ' + (c.workflowId||'?');
+  if (n.type === 'loop') return 'items: ' + String(c.items||'').slice(0,20);
+  if (n.type === 'repeat') return (c.times||1) + 'x';
+  return '';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; });
+}
+
+function makeDraggable(el, node) {
+  var startX, startY, origX, origY, dragging = false;
+  el.addEventListener('mousedown', function(e) {
+    if (e.target.classList.contains('node-port')) return;
+    e.stopPropagation();
+    selectNode(node.id);
+    dragging = true;
+    startX = e.clientX; startY = e.clientY;
+    origX = node.x; origY = node.y;
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  function onMove(e) {
+    if (!dragging) return;
+    node.x = Math.max(0, origX + (e.clientX - startX));
+    node.y = Math.max(0, origY + (e.clientY - startY));
+    el.style.left = node.x + 'px';
+    el.style.top  = node.y + 'px';
+    drawConnections();
+  }
+  function onUp() {
+    dragging = false;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  }
+}
+
+function bindCanvasEvents() {
+  var canvas = document.getElementById('wf-canvas');
+  canvas.addEventListener('mousedown', function(e) {
+    if (e.target.classList.contains('node-port')) {
+      var port = e.target;
+      var srcId = port.dataset.id;
+      var portType = port.dataset.port;
+      if (portType === 'in') return;
+      BLD.drag = { srcId: srcId, port: portType, fromX: e.clientX, fromY: e.clientY };
+      var svg = document.getElementById('wf-canvas-svg');
+      var tempPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      tempPath.setAttribute('class', 'temp');
+      tempPath.setAttribute('id', 'temp-path');
+      svg.appendChild(tempPath);
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!BLD.drag) return;
+    var canvas = document.getElementById('wf-canvas');
+    var rect = canvas.getBoundingClientRect();
+    var srcNode = BLD.nodes.find(function(n){ return n.id === BLD.drag.srcId; });
+    if (!srcNode) return;
+    var sx = srcNode.x + 120 - canvas.scrollLeft;
+    var sy = srcNode.y + 25 - canvas.scrollTop;
+    var ex = e.clientX - rect.left;
+    var ey = e.clientY - rect.top;
+    var temp = document.getElementById('temp-path');
+    if (temp) temp.setAttribute('d', bezier(sx, sy, ex, ey));
+  });
+  document.addEventListener('mouseup', function(e) {
+    if (!BLD.drag) return;
+    var target = document.elementFromPoint(e.clientX, e.clientY);
+    if (target && target.classList.contains('node-port') && target.dataset.port === 'in') {
+      var targetId = target.dataset.id;
+      var srcNode = BLD.nodes.find(function(n){ return n.id === BLD.drag.srcId; });
+      if (srcNode && targetId !== srcNode.id) {
+        if (BLD.drag.port === 'next') srcNode.next = targetId;
+        else if (BLD.drag.port === 'true' || BLD.drag.port === 'false') {
+          srcNode.branches = srcNode.branches || {};
+          srcNode.branches[BLD.drag.port] = targetId;
+        }
+      }
+    }
+    var temp = document.getElementById('temp-path');
+    if (temp) temp.remove();
+    BLD.drag = null;
+    renderCanvas();
+  });
+  document.getElementById('wf-canvas').addEventListener('click', function(e) {
+    if (e.target.id === 'wf-canvas' || e.target.id === 'wf-canvas-svg') {
+      selectNode(null);
+    }
+  });
+}
+
+function bezier(sx, sy, ex, ey) {
+  var dx = Math.max(40, Math.abs(ex - sx) / 2);
+  return 'M' + sx + ',' + sy + ' C' + (sx + dx) + ',' + sy + ' ' + (ex - dx) + ',' + ey + ' ' + ex + ',' + ey;
+}
+
+function drawConnections() {
+  var svg = document.getElementById('wf-canvas-svg');
+  var canvas = document.getElementById('wf-canvas');
+  // Clear existing paths (except temp)
+  Array.from(svg.querySelectorAll('path:not(.temp)')).forEach(function(p){ p.remove(); });
+  BLD.nodes.forEach(function(node) {
+    var edges = [];
+    if (node.next) edges.push({ to: node.next, color: '#475569' });
+    if (node.branches) {
+      if (node.branches.true)  edges.push({ to: node.branches.true,  color: '#22c55e', yOffset: -15 });
+      if (node.branches.false) edges.push({ to: node.branches.false, color: '#ef4444', yOffset: 15 });
+    }
+    edges.forEach(function(edge) {
+      var dst = BLD.nodes.find(function(n){ return n.id === edge.to; });
+      if (!dst) return;
+      var sx = node.x + 120 - canvas.scrollLeft;
+      var sy = node.y + 25 + (edge.yOffset || 0) - canvas.scrollTop;
+      var ex = dst.x - canvas.scrollLeft;
+      var ey = dst.y + 25 - canvas.scrollTop;
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', bezier(sx, sy, ex, ey));
+      path.setAttribute('stroke', edge.color);
+      path.dataset.from = node.id;
+      path.dataset.toEdge = edge.color === '#22c55e' ? 'true' : (edge.color === '#ef4444' ? 'false' : 'next');
+      path.addEventListener('click', function() {
+        if (!confirm('Hapus koneksi ini?')) return;
+        if (edge.color === '#22c55e') node.branches.true = null;
+        else if (edge.color === '#ef4444') node.branches.false = null;
+        else node.next = null;
+        renderCanvas();
+      });
+      svg.appendChild(path);
+    });
+  });
+}
+
+function selectNode(id) {
+  BLD.selectedId = id;
+  renderInspector();
+  Array.from(document.querySelectorAll('.canvas-node')).forEach(function(n) {
+    n.classList.toggle('selected', n.dataset.id === id);
+  });
+}
+
+function renderInspector() {
+  var insp = document.getElementById('inspector');
+  if (!BLD.selectedId) {
+    insp.innerHTML = '<div style="color:#64748b;font-size:.75rem">Pilih node untuk edit</div>';
+    return;
+  }
+  var node = BLD.nodes.find(function(n){ return n.id === BLD.selectedId; });
+  if (!node) return;
+  var def = NODE_DEFS[node.type] || { fields: [] };
+  var html = '<div class="inspector-field"><label>ID</label><input value="' + escapeHtml(node.id) + '" onchange="renameNode(\'' + node.id + '\', this.value)"></div>';
+  html += '<div class="inspector-field"><label>Type</label><input value="' + node.type + '" disabled></div>';
+  def.fields.forEach(function(f) {
+    var val = node.config[f] || '';
+    var isLong = (f === 'text' || f === 'prompt' || f === 'system' || f === 'body' || f === 'expr' || f === 'content' || f === 'caption');
+    html += '<div class="inspector-field"><label>' + f + '</label>';
+    if (isLong) {
+      html += '<textarea oninput="updateField(\'' + node.id + '\',\'' + f + '\',this.value)">' + escapeHtml(val) + '</textarea>';
+    } else {
+      html += '<input value="' + escapeHtml(val) + '" oninput="updateField(\'' + node.id + '\',\'' + f + '\',this.value)">';
+    }
+    html += '</div>';
+  });
+  // Retry + timeout
+  html += '<div class="inspector-field"><label>Retry times (0–9)</label><input type="number" min="0" max="9" value="' + ((node.retry && node.retry.times) || 0) + '" onchange="updateRetry(\'' + node.id + '\',\'times\',this.value)"></div>';
+  html += '<div class="inspector-field"><label>Retry backoff</label><select onchange="updateRetry(\'' + node.id + '\',\'backoff\',this.value)">' +
+          '<option value="fixed"' + (node.retry && node.retry.backoff === 'fixed' ? ' selected' : '') + '>fixed</option>' +
+          '<option value="exponential"' + (node.retry && node.retry.backoff === 'exponential' ? ' selected' : '') + '>exponential</option>' +
+          '</select></div>';
+  html += '<div class="inspector-field"><label>Timeout (sec, 0=default)</label><input type="number" min="0" value="' + (node.timeout ? Math.round(node.timeout/1000) : 0) + '" onchange="updateTimeout(\'' + node.id + '\',this.value)"></div>';
+  html += '<div class="inspector-field"><label>On error</label><select onchange="updateField(\'' + node.id + '\',\'_onError\',this.value)">' +
+          '<option value="stop"' + (node.onError !== 'continue' ? ' selected' : '') + '>stop</option>' +
+          '<option value="continue"' + (node.onError === 'continue' ? ' selected' : '') + '>continue</option>' +
+          '</select></div>';
+  html += '<div style="display:flex;gap:6px;margin-top:10px">';
+  html += '<button class="btn secondary" style="padding:5px 10px;font-size:.75rem" onclick="setEntry(\'' + node.id + '\')">Set Entry</button>';
+  html += '<button class="btn danger" style="padding:5px 10px;font-size:.75rem" onclick="deleteNode(\'' + node.id + '\')">Hapus</button>';
+  html += '</div>';
+  insp.innerHTML = html;
+}
+
+function updateField(id, field, value) {
+  var node = BLD.nodes.find(function(n){ return n.id === id; });
+  if (!node) return;
+  if (field === '_onError') { node.onError = value; return; }
+  node.config[field] = value;
+  renderCanvas();
+}
+
+function updateRetry(id, key, value) {
+  var node = BLD.nodes.find(function(n){ return n.id === id; });
+  if (!node) return;
+  node.retry = node.retry || { times: 0, backoff: 'fixed', delayMs: 1000 };
+  if (key === 'times') node.retry.times = parseInt(value) || 0;
+  if (key === 'backoff') node.retry.backoff = value;
+  if (node.retry.times === 0) delete node.retry;
+  renderCanvas();
+}
+
+function updateTimeout(id, sec) {
+  var node = BLD.nodes.find(function(n){ return n.id === id; });
+  if (!node) return;
+  var n = parseInt(sec) || 0;
+  if (n > 0) node.timeout = n * 1000;
+  else delete node.timeout;
+  renderCanvas();
+}
+
+function renameNode(oldId, newId) {
+  newId = (newId || '').trim();
+  if (!newId || newId === oldId) return;
+  if (BLD.nodes.find(function(n){ return n.id === newId; })) {
+    alert('ID "' + newId + '" sudah dipakai');
+    renderInspector();
+    return;
+  }
+  BLD.nodes.forEach(function(n) {
+    if (n.id === oldId) n.id = newId;
+    if (n.next === oldId) n.next = newId;
+    if (n.branches) {
+      if (n.branches.true === oldId)  n.branches.true  = newId;
+      if (n.branches.false === oldId) n.branches.false = newId;
+    }
+  });
+  if (BLD.entry === oldId) BLD.entry = newId;
+  BLD.selectedId = newId;
+  renderCanvas();
+  renderInspector();
+}
+
+function setEntry(id) {
+  BLD.entry = id;
+  renderCanvas();
+}
+
+function deleteNode(id) {
+  if (!confirm('Hapus node "' + id + '"?')) return;
+  BLD.nodes = BLD.nodes.filter(function(n){ return n.id !== id; });
+  BLD.nodes.forEach(function(n) {
+    if (n.next === id) n.next = null;
+    if (n.branches) {
+      if (n.branches.true === id)  n.branches.true  = null;
+      if (n.branches.false === id) n.branches.false = null;
+    }
+  });
+  if (BLD.entry === id) BLD.entry = (BLD.nodes[0] && BLD.nodes[0].id) || null;
+  BLD.selectedId = null;
+  renderCanvas();
+  renderInspector();
+}
+
+function updateTriggerConfig() {
+  var t = document.getElementById('bld-trigger').value;
+  var arg = document.getElementById('bld-trigger-arg');
+  var hints = {
+    'wa.message':      'Keyword/regex (kosong = semua)',
+    'schedule':        'Interval: 30s / 5m / 1h / 24h',
+    'file':            'Path folder/file',
+    'webhook':         'Webhook ID (default = workflow ID)',
+    'wa.group_event':  'Actions: add,remove (pisah koma)',
+  };
+  if (hints[t]) {
+    arg.placeholder = hints[t];
+    arg.style.display = 'inline-block';
+  } else {
+    arg.style.display = 'none';
+  }
+}
+
+function buildTriggerFromUI() {
+  var t = document.getElementById('bld-trigger').value;
+  var arg = (document.getElementById('bld-trigger-arg').value || '').trim();
+  if (t === 'manual') return { type: 'manual' };
+  if (t === 'wa.message') return { type: 'wa.message', match: arg || null };
+  if (t === 'schedule')   return { type: 'schedule', interval: arg || '1h' };
+  if (t === 'file')       return { type: 'file', path: arg || '~/bima-inbox', events: ['created', 'modified'] };
+  if (t === 'webhook')    return { type: 'webhook', webhookId: arg || null };
+  if (t === 'wa.group_event') return { type: 'wa.group_event', actions: (arg || 'add,remove').split(',').map(function(s){ return s.trim(); }) };
+  return { type: 'manual' };
+}
+
+async function saveBuilder() {
+  var id = (document.getElementById('bld-id').value || '').trim();
+  var name = (document.getElementById('bld-name').value || '').trim();
+  if (!id || !name) { alert('ID dan nama wajib diisi'); return; }
+  if (!/^[a-z][a-z0-9_]*$/.test(id)) { alert('ID harus huruf kecil + underscore'); return; }
+  if (!BLD.entry) { alert('Tidak ada node entry'); return; }
+
+  // Strip x/y before save (positions are layout-only)
+  var nodes = BLD.nodes.map(function(n) {
+    var copy = JSON.parse(JSON.stringify(n));
+    // Store position separately in _layout so it survives reload
+    copy._layout = { x: n.x, y: n.y };
+    delete copy.x; delete copy.y;
+    return copy;
+  });
+
+  var wf = {
+    id: id,
+    name: name,
+    description: '',
+    enabled: false,
+    trigger: buildTriggerFromUI(),
+    nodes: nodes,
+    entry: BLD.entry,
+  };
+
+  try {
+    var r = await fetch('/api/workflows', { method: 'POST', headers: headers(), body: JSON.stringify(wf) });
+    var d = await r.json();
+    if (!r.ok) { alert('Gagal simpan: ' + (d.error || r.status)); return; }
+    setBuilderStatus('✓ Disimpan: ' + id, true);
+    refreshBuilderLoadList();
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+function setBuilderStatus(text, ok) {
+  var s = document.getElementById('bld-status');
+  s.textContent = text;
+  s.style.color = ok ? '#22c55e' : '#ef4444';
+  setTimeout(function(){ s.textContent = ''; }, 3000);
+}
+
+function newBuilder() {
+  if (BLD.nodes.length && !confirm('Buang workflow saat ini?')) return;
+  BLD.nodes = [];
+  BLD.entry = null;
+  BLD.selectedId = null;
+  document.getElementById('bld-id').value = '';
+  document.getElementById('bld-name').value = '';
+  document.getElementById('bld-trigger').value = 'manual';
+  updateTriggerConfig();
+  renderCanvas();
+  renderInspector();
+}
+
+async function refreshBuilderLoadList() {
+  try {
+    var r = await fetch('/api/workflows', { headers: headers() });
+    var d = await r.json();
+    var sel = document.getElementById('bld-load');
+    sel.innerHTML = '<option value="">-- Load existing --</option>';
+    (d.workflows || d || []).forEach(function(wf) {
+      var opt = document.createElement('option');
+      opt.value = wf.id;
+      opt.textContent = wf.id + ' — ' + (wf.name || '?');
+      sel.appendChild(opt);
+    });
+  } catch {}
+}
+
+async function loadWfToBuilder(id) {
+  if (!id) return;
+  try {
+    var r = await fetch('/api/workflows/' + encodeURIComponent(id), { headers: headers() });
+    var data = await r.json();
+    if (!r.ok) { alert('Gagal load: ' + (data.error || r.status)); return; }
+    var wf = data.workflow || data;
+    document.getElementById('bld-id').value = wf.id;
+    document.getElementById('bld-name').value = wf.name || '';
+    document.getElementById('bld-trigger').value = (wf.trigger && wf.trigger.type) || 'manual';
+    var arg = '';
+    if (wf.trigger) {
+      if (wf.trigger.type === 'wa.message')      arg = wf.trigger.match || '';
+      else if (wf.trigger.type === 'schedule')   arg = wf.trigger.interval || '';
+      else if (wf.trigger.type === 'file')       arg = wf.trigger.path || '';
+      else if (wf.trigger.type === 'webhook')    arg = wf.trigger.webhookId || '';
+      else if (wf.trigger.type === 'wa.group_event') arg = (wf.trigger.actions || ['add','remove']).join(',');
+    }
+    document.getElementById('bld-trigger-arg').value = arg;
+    updateTriggerConfig();
+
+    // Auto-layout if no _layout stored
+    var nodes = (wf.nodes || []).map(function(n, i) {
+      var node = JSON.parse(JSON.stringify(n));
+      if (node._layout) {
+        node.x = node._layout.x;
+        node.y = node._layout.y;
+      } else {
+        node.x = 60 + (i % 4) * 180;
+        node.y = 30 + Math.floor(i / 4) * 110;
+      }
+      delete node._layout;
+      return node;
+    });
+    BLD.nodes = nodes;
+    BLD.entry = wf.entry;
+    BLD.selectedId = null;
+    renderCanvas();
+    renderInspector();
+    setBuilderStatus('✓ Loaded: ' + id, true);
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function testRunBuilder() {
+  var id = (document.getElementById('bld-id').value || '').trim();
+  if (!id) { alert('Simpan workflow dulu sebelum test run'); return; }
+  try {
+    var r = await fetch('/api/workflows/' + encodeURIComponent(id) + '/run', { method: 'POST', headers: headers(), body: '{}' });
+    var d = await r.json();
+    if (!r.ok) { alert('Gagal: ' + (d.error || r.status)); return; }
+    alert('Run: ' + (d.ok ? 'OK' : 'FAIL') + '\n' + (d.error || (d.steps || 0) + ' steps, ' + (d.durationMs || 0) + 'ms'));
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
 loadStatus();
 </script>
 </body>
@@ -693,6 +1326,48 @@ async function handleRequest(req, res) {
   }
 
   // ── Workflow REST API ─────────────────────────────────────
+
+  // POST /api/workflows — create or replace workflow (used by visual builder)
+  if (route === '/api/workflows' && method === 'POST') {
+    if (!auth(req, res)) return;
+    try {
+      const wf = await readBody(req);
+      if (!wf.id || !wf.name || !wf.entry) {
+        return send(res, 400, { error: 'id, name, entry wajib diisi' });
+      }
+
+      const { validateWorkflow } = require('./workflow_ai');
+      try { validateWorkflow(wf); }
+      catch (e) { return send(res, 400, { error: 'Validasi gagal: ' + e.message }); }
+
+      const { saveWorkflow, getWorkflow, deactivateTriggers, activateTriggers } = require('./workflow');
+      const existed = getWorkflow(_tenantId(), wf.id);
+      if (existed) {
+        // Preserve enabled state + createdAt; restart triggers
+        wf.enabled   = existed.enabled;
+        wf.createdAt = existed.createdAt;
+        deactivateTriggers(_tenantId(), wf.id);
+      } else {
+        wf.enabled   = wf.enabled || false;
+        wf.createdAt = Date.now();
+      }
+      wf.tenant = _tenantId();
+      saveWorkflow(_tenantId(), wf);
+      if (wf.enabled) activateTriggers(_tenantId(), wf, { _tenantId: _tenantId() }, null);
+      return send(res, 200, { ok: true, id: wf.id, created: !existed });
+    } catch (e) { return send(res, 500, { error: e.message }); }
+  }
+
+  // DELETE /api/workflows/:id — remove workflow
+  if (route.match(/^\/api\/workflows\/[^/]+$/) && method === 'DELETE') {
+    if (!auth(req, res)) return;
+    const wfId = route.slice(15);
+    const { getWorkflow, deleteWorkflow, deactivateTriggers } = require('./workflow');
+    if (!getWorkflow(_tenantId(), wfId)) return send(res, 404, { error: 'Workflow tidak ditemukan' });
+    deactivateTriggers(_tenantId(), wfId);
+    deleteWorkflow(_tenantId(), wfId);
+    return send(res, 200, { ok: true, id: wfId });
+  }
 
   // GET /api/workflows
   if (route === '/api/workflows' && method === 'GET') {

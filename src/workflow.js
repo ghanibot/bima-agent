@@ -58,6 +58,125 @@ function resolveVars(text, ctx) {
   });
 }
 
+// ── Retry + timeout wrapper ───────────────────────────────────
+// Per-node config:
+//   node.timeout  — milliseconds (top-level). Falls back to type default.
+//   node.retry    — { times: 0..9, backoff: 'fixed'|'exponential', delayMs: 1000 }
+const _DEFAULT_TIMEOUT_MS = {
+  'http.request':  30000,
+  'ai.call':       90000,
+  'shell':         60000,
+  'wa.read_group': 10000,
+  'wa.send':       15000,
+  'wa.send_to':    15000,
+  'wa.send_media': 60000,  // media upload can be slow
+  'wa.transcribe': 120000, // STT can be slow on long audio
+  'wa.vision':     90000,  // vision AI
+  'loop':          300000,
+  'repeat':        300000,
+  'parallel':      180000,
+  'workflow.run':  180000,
+  'delay':         35000, // delay caps at 30s internally
+};
+
+function _resolveTimeoutMs(node) {
+  if (typeof node.timeout === 'number' && node.timeout > 0) return node.timeout;
+  return _DEFAULT_TIMEOUT_MS[node.type] || 60000;
+}
+
+function _resolveRetry(node) {
+  const r = node.retry || {};
+  return {
+    times:   Math.max(0, Math.min(parseInt(r.times) || 0, 9)),
+    delayMs: Math.max(100, parseInt(r.delayMs) || 1000),
+    backoff: r.backoff === 'exponential' ? 'exponential' : 'fixed',
+  };
+}
+
+// ── Media buffer resolution (for wa.transcribe / wa.vision / wa.send_media) ──
+// Fetches a media buffer from URL, file path, or the trigger message itself.
+async function _fetchMediaSource(source) {
+  if (!source || typeof source !== 'string') return null;
+
+  // URL
+  if (/^https?:\/\//i.test(source)) {
+    try {
+      const res = await fetch(source, { signal: AbortSignal.timeout(30000) });
+      if (!res.ok) return null;
+      const ab = await res.arrayBuffer();
+      return Buffer.from(ab);
+    } catch { return null; }
+  }
+
+  // File path (~ expand)
+  const abs = source.replace(/^~/, os.homedir());
+  try {
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+      return fs.readFileSync(abs);
+    }
+  } catch {}
+  return null;
+}
+
+// Resolves media buffer from node.config.source. Falls back to trigger msg media.
+// expectedType: 'audio' | 'image' | 'video' | 'document' (for trigger fallback)
+async function _resolveMediaBuffer(source, ctx, expectedType) {
+  if (source && source !== 'trigger') {
+    return _fetchMediaSource(source);
+  }
+  // Trigger fallback: use _downloadMedia from ctx (set by whatsapp.js)
+  if (typeof ctx._downloadMedia === 'function') {
+    try { return await ctx._downloadMedia(expectedType); }
+    catch { return null; }
+  }
+  return null;
+}
+
+async function _runWithRetryTimeout(executor, node, ctx) {
+  const timeoutMs = _resolveTimeoutMs(node);
+  const retry     = _resolveRetry(node);
+  const maxAttempts = retry.times + 1;
+
+  let lastResult = { ok: false, error: 'no attempt made' };
+  let attempts = 0;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    attempts = attempt;
+
+    // Expose timeoutMs to executors that need internal abort (http, shell)
+    const execCtx = { ...ctx, _nodeTimeoutMs: timeoutMs };
+
+    let timeoutHandle;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`node timeout setelah ${timeoutMs}ms`)),
+        timeoutMs
+      );
+    });
+
+    try {
+      const result = await Promise.race([executor(node, execCtx), timeoutPromise]);
+      clearTimeout(timeoutHandle);
+      lastResult = result;
+      if (result && result.ok) {
+        return { ...result, _attempts: attempt, _timeoutMs: timeoutMs };
+      }
+    } catch (e) {
+      clearTimeout(timeoutHandle);
+      lastResult = { ok: false, error: e.message };
+    }
+
+    if (attempt < maxAttempts) {
+      const delay = retry.backoff === 'exponential'
+        ? retry.delayMs * Math.pow(2, attempt - 1)
+        : retry.delayMs;
+      await new Promise(r => setTimeout(r, Math.min(delay, 30000)));
+    }
+  }
+
+  return { ...lastResult, _attempts: attempts, _timeoutMs: timeoutMs };
+}
+
 // ── Node executors ────────────────────────────────────────────
 const NODE_EXECUTORS = {
 
@@ -165,8 +284,10 @@ const NODE_EXECUTORS = {
       return { ok: false, error: 'Sandbox nonaktif. Aktifkan dulu: /workflow sandbox on' };
     }
 
-    const cmd     = resolveVars(node.config?.cmd || '', ctx);
-    const timeout = Math.min((node.config?.timeout || 10) * 1000, 60000);
+    const cmd = resolveVars(node.config?.cmd || '', ctx);
+    // Prefer outer timeout (via ctx._nodeTimeoutMs); fall back to legacy config.timeout
+    const timeout = ctx._nodeTimeoutMs
+      || Math.min((node.config?.timeout || 10) * 1000, 60000);
     if (!cmd) return { ok: false, error: 'cmd kosong' };
 
     // Choose shell based on platform
@@ -214,11 +335,13 @@ const NODE_EXECUTORS = {
       body = rawBody;
     }
 
+    // Use outer-resolved timeout so fetch actually aborts when wrapper times out
+    const fetchTimeout = ctx._nodeTimeoutMs || 30000;
     const res = await fetch(url, {
       method,
       headers,
       body,
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(fetchTimeout),
     });
 
     const text = await res.text();
@@ -286,6 +409,85 @@ const NODE_EXECUTORS = {
     return { ok: true, output: output.slice(0, 4000) };
   },
 
+  // ── WA media nodes ───────────────────────────────────────
+  // wa.transcribe — voice note buffer → text (Whisper/HF STT)
+  // source:
+  //   'trigger' — use audio from message that triggered (default)
+  //   <URL>     — fetch audio from URL
+  //   <path>    — read from disk
+  'wa.transcribe': async (node, ctx) => {
+    const { transcribe } = require('./stt');
+    const { getConfig }  = require('./config');
+    const cfg = getConfig(ctx._tenantId);
+
+    const buffer = await _resolveMediaBuffer(node.config?.source, ctx, 'audio');
+    if (!buffer) return { ok: false, error: 'tidak ada audio (cek source/trigger)' };
+
+    const text = await transcribe(buffer, cfg);
+    if (!text) return { ok: false, error: 'transkripsi kosong' };
+    return { ok: true, output: text };
+  },
+
+  // wa.vision — image buffer + pertanyaan → jawaban AI
+  // source: 'trigger' | URL | path
+  'wa.vision': async (node, ctx) => {
+    const { analyzeImage } = require('./ai');
+    const { getConfig }    = require('./config');
+    const cfg = getConfig(ctx._tenantId);
+
+    const buffer = await _resolveMediaBuffer(node.config?.source, ctx, 'image');
+    if (!buffer) return { ok: false, error: 'tidak ada gambar (cek source/trigger)' };
+
+    const mime     = ctx._mediaMime || 'image/jpeg';
+    const question = resolveVars(node.config?.question || 'Jelaskan isi gambar ini.', ctx);
+
+    const answer = await analyzeImage(buffer, mime, question, cfg);
+    return { ok: true, output: answer };
+  },
+
+  // wa.send_media — kirim gambar/audio/video/dokumen ke JID
+  // config:
+  //   jid?      — default ctx._jid
+  //   type      — 'image'|'audio'|'video'|'document' (required)
+  //   source    — URL atau path file (required)
+  //   caption?  — caption / teks pendamping
+  //   ptt?      — true = voice note (audio only)
+  //   filename? — untuk document
+  'wa.send_media': async (node, ctx) => {
+    if (!ctx._sendMediaFn) return { ok: false, error: 'no _sendMediaFn in context (run from WA trigger only)' };
+
+    const jid     = resolveVars(node.config?.jid || ctx._jid || '', ctx);
+    const type    = (node.config?.type || '').toLowerCase();
+    const source  = resolveVars(node.config?.source || '', ctx);
+    const caption = node.config?.caption ? resolveVars(node.config.caption, ctx) : undefined;
+    const ptt     = !!node.config?.ptt;
+    const filename = node.config?.filename ? resolveVars(node.config.filename, ctx) : undefined;
+
+    if (!jid)    return { ok: false, error: 'jid kosong' };
+    if (!type)   return { ok: false, error: 'type wajib (image/audio/video/document)' };
+    if (!['image','audio','video','document'].includes(type)) {
+      return { ok: false, error: `type "${type}" tidak valid` };
+    }
+    if (!source) return { ok: false, error: 'source kosong (URL atau path)' };
+
+    const buffer = await _fetchMediaSource(source);
+    if (!buffer) return { ok: false, error: `gagal ambil media dari "${source}"` };
+
+    const mediaObj = { [type]: buffer };
+    if (caption && (type === 'image' || type === 'video' || type === 'document')) mediaObj.caption = caption;
+    if (type === 'audio') {
+      mediaObj.mimetype = 'audio/ogg; codecs=opus';
+      if (ptt) mediaObj.ptt = true;
+    }
+    if (type === 'document') {
+      mediaObj.fileName = filename || 'file';
+      mediaObj.mimetype = node.config?.mimetype || 'application/octet-stream';
+    }
+
+    await ctx._sendMediaFn(jid, mediaObj);
+    return { ok: true, output: `${type} terkirim ke ${jid.split('@')[0]}` };
+  },
+
   // json.extract — extract field from JSON string in lastOutput
   'json.extract': async (node, ctx) => {
     const keyPath = node.config?.path;
@@ -335,10 +537,17 @@ async function runChain(wf, entryNodeId, ctx, maxSteps = 100) {
     if (!executor) { steps.push({ nodeId, ok: false, error: `unknown type "${node.type}"` }); break; }
 
     let result;
-    try { result = await executor(node, ctx); }
+    try { result = await _runWithRetryTimeout(executor, node, ctx); }
     catch (e) { result = { ok: false, error: e.message }; }
 
-    steps.push({ nodeId, type: node.type, ok: result.ok, error: result.error || null, output: result.output });
+    steps.push({
+      nodeId,
+      type:     node.type,
+      ok:       result.ok,
+      error:    result.error || null,
+      output:   result.output,
+      attempts: result._attempts || 1,
+    });
 
     if (!result.ok && node.onError !== 'continue') break;
 
@@ -463,9 +672,23 @@ Object.assign(_phase5Executors, {
   },
 });
 
+// ── System-wide senders (set by whatsapp.js on connect) ─────
+// Scheduled/file/webhook workflows inherit these so they can call wa.send / wa.send_media
+let _systemSendFn      = null;
+let _systemSendMediaFn = null;
+
+function setSystemSenders({ sendFn, sendMediaFn } = {}) {
+  if (sendFn      !== undefined) _systemSendFn      = sendFn;
+  if (sendMediaFn !== undefined) _systemSendMediaFn = sendMediaFn;
+}
+
 // ── DAG runner ────────────────────────────────────────────────
 async function runWorkflow(wf, context, logFn) {
   const ctx = { ...context, _logFn: logFn, _wf: wf }; // _wf for loop/parallel/sub-workflow
+
+  // Inject system-wide senders if not already provided by caller
+  if (!ctx._sendFn      && _systemSendFn)      ctx._sendFn      = _systemSendFn;
+  if (!ctx._sendMediaFn && _systemSendMediaFn) ctx._sendMediaFn = _systemSendMediaFn;
   const run = {
     workflowId: wf.id,
     startedAt:  Date.now(),
@@ -502,22 +725,24 @@ async function runWorkflow(wf, context, logFn) {
     const t0 = Date.now();
     let result;
     try {
-      result = await executor(node, ctx);
+      result = await _runWithRetryTimeout(executor, node, ctx);
     } catch (e) {
       result = { ok: false, error: e.message };
     }
 
     const step = {
       nodeId,
-      type:   node.type,
-      ok:     result.ok,
-      ms:     Date.now() - t0,
-      output: result.output,
-      error:  result.error || null,
+      type:     node.type,
+      ok:       result.ok,
+      ms:       Date.now() - t0,
+      output:   result.output,
+      error:    result.error || null,
+      attempts: result._attempts || 1,
     };
     run.steps.push(step);
 
-    if (logFn) logFn('WF', `[${wf.id}] ${nodeId}(${node.type}) → ${result.ok ? 'ok' : 'ERR: ' + result.error}`);
+    const retryTag = step.attempts > 1 ? ` (×${step.attempts})` : '';
+    if (logFn) logFn('WF', `[${wf.id}] ${nodeId}(${node.type})${retryTag} → ${result.ok ? 'ok' : 'ERR: ' + result.error}`);
 
     if (!result.ok) {
       if (node.onError === 'continue') {
@@ -671,7 +896,8 @@ function startScheduledWorkflows(tenantId, context, logFn) {
 
 // ── WA message trigger — called from whatsapp.js ─────────────
 // Returns true if a workflow handled the message (caller should skip normal AI)
-async function handleWATrigger(tenantId, jid, sender, text, sendFn, logFn) {
+// extras (optional): { msg, downloadMedia, sendMediaFn, mediaType, mediaMime }
+async function handleWATrigger(tenantId, jid, sender, text, sendFn, logFn, extras = {}) {
   const workflows = listWorkflows(tenantId);
   let handled = false;
 
@@ -679,11 +905,21 @@ async function handleWATrigger(tenantId, jid, sender, text, sendFn, logFn) {
     if (!wf.enabled) continue;
     if (wf.trigger?.type !== 'wa.message') continue;
 
-    const match = wf.trigger.match;
-    let triggered = false;
+    const match     = wf.trigger.match;
+    const mediaOnly = wf.trigger.mediaOnly === true;
+    const triggerOnMedia = wf.trigger.onMedia; // 'audio' | 'image' | 'any' | undefined
 
-    if (!match) {
+    // Skip non-media messages if workflow is media-only
+    if (mediaOnly && !extras.mediaType) continue;
+
+    // If workflow specifies onMedia filter, require matching media type
+    if (triggerOnMedia && triggerOnMedia !== 'any' && extras.mediaType !== triggerOnMedia) continue;
+
+    let triggered = false;
+    if (mediaOnly && extras.mediaType) {
       triggered = true;
+    } else if (!match) {
+      triggered = !!text;
     } else if (match.startsWith('/') && match.endsWith('/')) {
       try { triggered = new RegExp(match.slice(1, -1), 'i').test(text); } catch {}
     } else {
@@ -699,9 +935,14 @@ async function handleWATrigger(tenantId, jid, sender, text, sendFn, logFn) {
       _sender:   sender,
       _text:     text,
       _sendFn:   sendFn,
-      message:   text,
+      _sendMediaFn:   extras.sendMediaFn   || null,
+      _downloadMedia: extras.downloadMedia || null,
+      _mediaType:     extras.mediaType     || null,
+      _mediaMime:     extras.mediaMime     || null,
+      message:    text,
       sender_jid: sender,
       sender_name: sender.split('@')[0].split(':')[0],
+      media_type: extras.mediaType || null,
     };
 
     runWorkflow(wf, ctx, logFn).catch(e => {
@@ -931,4 +1172,5 @@ module.exports = {
   deactivateTriggers,
   // WA message
   handleWATrigger,
+  setSystemSenders,
 };

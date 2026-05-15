@@ -19,7 +19,10 @@ const C = {
 const NODE_STYLE = {
   'wa.send':        { icon: '📨', color: C.green },
   'wa.send_to':     { icon: '📩', color: C.green },
+  'wa.send_media':  { icon: '🖼 ', color: C.green },
   'wa.read_group':  { icon: '📖', color: C.cyan },
+  'wa.transcribe':  { icon: '🎙 ', color: C.magenta },
+  'wa.vision':      { icon: '👁 ', color: C.magenta },
   'ai.call':        { icon: '🤖', color: C.magenta },
   'http.request':   { icon: '🌐', color: C.blue },
   'shell':          { icon: '💻', color: C.orange },
@@ -70,6 +73,9 @@ function configSummary(node) {
     case 'set':           return `${cfg.key} = ${clip(String(cfg.value||''), 30)}`;
     case 'log':           return cfg.text     ? `"${clip(cfg.text, 40)}"` : '';
     case 'wa.read_group': return `last ${cfg.limit||10} msgs${cfg.jid ? ` from ${cfg.jid.split('@')[0]}` : ''}`;
+    case 'wa.transcribe': return `source: ${cfg.source || 'trigger'}`;
+    case 'wa.vision':     return `source: ${cfg.source || 'trigger'}${cfg.question ? ` Q:"${clip(cfg.question, 25)}"` : ''}`;
+    case 'wa.send_media': return `${cfg.type || '?'} ${clip(cfg.source, 30)}${cfg.caption ? ` cap:"${clip(cfg.caption, 20)}"` : ''}`;
     default: return '';
   }
 }
@@ -93,8 +99,19 @@ function renderNode(wf, nodeId, indent, isLast, visited, lines, depthLimit = 40)
 
   const { icon, color } = nodeStyle(node.type);
   const summary = configSummary(node);
-  const label   = color(`${icon} ${C.bold(node.id)} [${node.type}]`) +
-                  (summary ? C.gray(`  ${summary}`) : '');
+
+  // Retry + timeout badges
+  const badges = [];
+  if (node.retry?.times > 0) {
+    badges.push(`↻${node.retry.times}${node.retry.backoff === 'exponential' ? '⤴' : ''}`);
+  }
+  if (typeof node.timeout === 'number') {
+    badges.push(`⏱${Math.round(node.timeout / 1000)}s`);
+  }
+  const badgeStr = badges.length ? ' ' + C.yellow(badges.join(' ')) : '';
+
+  const label = color(`${icon} ${C.bold(node.id)} [${node.type}]`) + badgeStr +
+                (summary ? C.gray(`  ${summary}`) : '');
 
   lines.push(`${indent}${label}`);
 
@@ -272,10 +289,11 @@ function renderRunTrace(wf, run) {
     const { icon, color } = nodeStyle(step.type);
     const statusIcon = step.ok ? C.green('✓') : C.red('✗');
     const ms         = C.gray(`${step.ms}ms`);
+    const retryTag   = step.attempts > 1 ? C.yellow(` ↻×${step.attempts}`) : '';
     const out        = step.output
       ? C.gray(`  → ${clip(String(step.output), 50)}`)
       : '';
-    lines.push(`  ${statusIcon} ${color(`${icon} ${step.nodeId}`)}  ${ms}${out}`);
+    lines.push(`  ${statusIcon} ${color(`${icon} ${step.nodeId}`)}${retryTag}  ${ms}${out}`);
     if (step.error) lines.push(`    ${C.red(`! ${step.error}`)}`);
   });
 

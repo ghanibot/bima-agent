@@ -618,6 +618,22 @@ async function cmdWorkflow(args) {
       const match     = (await ask(' Keyword/regex (kosong = semua pesan): ')).trim();
       const exclusive = (await ask(' Hentikan respon AI normal? (y/N): ')).trim().toLowerCase();
       trigger = { type: 'wa.message', match: match || null, exclusive: exclusive === 'y' };
+
+      // Optional media filter
+      const mediaIdx = await ui.selectMenu('Filter media (opsional):', [
+        { label: 'Semua pesan',  desc: 'Teks dan media' },
+        { label: 'Hanya audio',  desc: 'Trigger hanya saat voice note masuk' },
+        { label: 'Hanya gambar', desc: 'Trigger hanya saat foto masuk' },
+        { label: 'Hanya video',  desc: 'Trigger hanya saat video masuk' },
+        { label: 'Hanya dokumen',desc: 'Trigger hanya saat file dokumen masuk' },
+        { label: 'Media apapun', desc: 'Abaikan pesan teks-saja' },
+      ]);
+      const mediaMap = [null, 'audio', 'image', 'video', 'document', 'any'];
+      const onMedia  = mediaMap[mediaIdx ?? 0];
+      if (onMedia) {
+        trigger.onMedia   = onMedia;
+        trigger.mediaOnly = true;
+      }
     } else if (triggerIdx === 2) {
       const interval = (await ask(' Interval (contoh: 30s / 5m / 1h / 24h): ')).trim();
       trigger = { type: 'schedule', interval };
@@ -654,6 +670,9 @@ async function cmdWorkflow(args) {
     const NODE_MENU = [
       { label: 'wa.send',       desc: 'Kirim pesan ke chat sumber' },
       { label: 'wa.send_to',    desc: 'Kirim pesan ke JID tertentu' },
+      { label: 'wa.send_media', desc: 'Kirim gambar/audio/video/dokumen' },
+      { label: 'wa.transcribe', desc: 'Voice note → teks (STT)' },
+      { label: 'wa.vision',     desc: 'Gambar → jawaban AI (vision/OCR)' },
       { label: 'ai.call',       desc: 'Panggil AI dengan prompt' },
       { label: 'http.request',  desc: 'HTTP GET/POST ke URL eksternal' },
       { label: 'shell',         desc: 'Jalankan perintah OS (butuh sandbox on)' },
@@ -690,6 +709,46 @@ async function cmdWorkflow(args) {
       } else if (nodeType === 'wa.send_to') {
         node.config.jid  = await ask(' JID tujuan (contoh: 628xxx@s.whatsapp.net): ');
         node.config.text = await ask(' Teks pesan: ');
+      } else if (nodeType === 'wa.send_media') {
+        const typeIdx = await ui.selectMenu('Jenis media:', [
+          { label: 'image',    desc: 'Foto/gambar' },
+          { label: 'audio',    desc: 'Audio/voice note' },
+          { label: 'video',    desc: 'Video' },
+          { label: 'document', desc: 'File dokumen' },
+        ]);
+        const types = ['image', 'audio', 'video', 'document'];
+        node.config.type = types[typeIdx ?? 0];
+        node.config.jid    = (await ask(' JID tujuan (kosong = chat sumber): ')).trim() || undefined;
+        node.config.source = await ask(' URL atau path file: ');
+        const cap          = (await ask(' Caption (opsional): ')).trim();
+        if (cap) node.config.caption = cap;
+        if (node.config.type === 'audio') {
+          const pttIdx = await ui.selectMenu('Mode audio:', [
+            { label: 'Biasa',      desc: 'Audio normal' },
+            { label: 'Voice note', desc: 'Voice note (ptt)' },
+          ]);
+          if (pttIdx === 1) node.config.ptt = true;
+        }
+        if (node.config.type === 'document') {
+          node.config.filename = (await ask(' Nama file (default: file): ')).trim() || undefined;
+          node.config.mimetype = (await ask(' MIME type (default: application/octet-stream): ')).trim() || undefined;
+        }
+      } else if (nodeType === 'wa.transcribe') {
+        const srcIdx = await ui.selectMenu('Source audio:', [
+          { label: 'trigger',  desc: 'Audio dari pesan WA yg memicu (default)' },
+          { label: 'URL/path', desc: 'Dari URL atau file path' },
+        ]);
+        if (srcIdx === 0) node.config.source = 'trigger';
+        else node.config.source = await ask(' URL atau path audio: ');
+      } else if (nodeType === 'wa.vision') {
+        const srcIdx = await ui.selectMenu('Source gambar:', [
+          { label: 'trigger',  desc: 'Gambar dari pesan WA yg memicu (default)' },
+          { label: 'URL/path', desc: 'Dari URL atau file path' },
+        ]);
+        if (srcIdx === 0) node.config.source = 'trigger';
+        else node.config.source = await ask(' URL atau path gambar: ');
+        const q = (await ask(' Pertanyaan ke AI (kosong = "Jelaskan isi gambar"): ')).trim();
+        if (q) node.config.question = q;
       } else if (nodeType === 'ai.call') {
         node.config.prompt = await ask(' Prompt (gunakan {{message}} untuk teks WA): ');
         node.config.system = (await ask(' System prompt (kosong = default Bima): ')).trim() || undefined;
@@ -756,6 +815,38 @@ async function cmdWorkflow(args) {
         { label: 'Lanjut ke next',  desc: 'Abaikan error, lanjut ke node berikutnya' },
       ]);
       if (onErrIdx === 1) node.onError = 'continue';
+
+      // Optional retry + timeout (skip for trivial nodes)
+      const FRAGILE_TYPES = new Set([
+        'http.request', 'ai.call', 'shell', 'workflow.run',
+        'wa.transcribe', 'wa.vision', 'wa.send_media',
+      ]);
+      if (FRAGILE_TYPES.has(nodeType)) {
+        const advIdx = await ui.selectMenu('Konfigurasi retry/timeout? (opsional)', [
+          { label: 'Skip',           desc: 'Pakai default (timeout sesuai tipe, tanpa retry)' },
+          { label: 'Tambah retry',   desc: 'Retry otomatis jika gagal (rekomendasi untuk HTTP/AI)' },
+          { label: 'Tambah timeout', desc: 'Batasi durasi eksekusi node (detik)' },
+          { label: 'Retry + timeout',desc: 'Atur keduanya' },
+        ]);
+        if (advIdx === 1 || advIdx === 3) {
+          const times = parseInt(await ask(' Jumlah retry (1-9): ')) || 0;
+          if (times > 0) {
+            const backoffIdx = await ui.selectMenu('Backoff:', [
+              { label: 'Fixed',       desc: 'Jeda sama tiap retry (default 1s)' },
+              { label: 'Exponential', desc: 'Jeda berlipat (1s, 2s, 4s, ...)' },
+            ]);
+            node.retry = {
+              times,
+              backoff: backoffIdx === 1 ? 'exponential' : 'fixed',
+              delayMs: parseInt(await ask(' Jeda awal (ms, default 1000): ')) || 1000,
+            };
+          }
+        }
+        if (advIdx === 2 || advIdx === 3) {
+          const sec = parseInt(await ask(' Timeout (detik): ')) || 0;
+          if (sec > 0) node.timeout = sec * 1000;
+        }
+      }
 
       nodes.push(node);
       println(`  ✓ Node "${nodeId}" [${nodeType}] ditambahkan.`);

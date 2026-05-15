@@ -17,6 +17,8 @@ SCHEMA WORKFLOW
     "type":      "manual" | "wa.message" | "schedule" | "file" | "webhook" | "wa.group_event"
     "match":     string   — keyword/regex (wa.message saja)
     "exclusive": boolean  — true = hentikan AI normal jika trigger cocok (wa.message)
+    "onMedia":   "audio"|"image"|"video"|"document"|"any"  — fire only on media of this type (wa.message)
+    "mediaOnly": boolean  — true = abaikan pesan teks, fire hanya jika ada media (wa.message)
     "interval":  string   — "30s"|"5m"|"1h"|"6h"|"24h" (schedule)
     "path":      string   — path folder/file (file)
     "events":    array    — ["created","modified"] (file)
@@ -52,6 +54,26 @@ shell         — jalankan perintah OS (sandbox harus aktif)
 
 wa.read_group — baca N pesan terakhir dari grup
   config: { jid?: string, limit?: number }
+
+wa.transcribe — voice note → teks (Speech-to-Text)
+  config: { source?: "trigger" | <URL> | <path> }
+  // "trigger" = pakai audio dari pesan WA yg memicu (default)
+  // Cocok dipasangkan dengan trigger wa.message + onMedia: "audio"
+
+wa.vision     — gambar → teks/jawaban via AI vision
+  config: { source?: "trigger" | <URL> | <path>,
+            question?: string }  // default: "Jelaskan isi gambar ini."
+
+wa.send_media — kirim gambar/audio/video/dokumen
+  config: {
+    jid?: string,          // default: chat sumber trigger
+    type: "image" | "audio" | "video" | "document",
+    source: string,        // URL atau path file
+    caption?: string,
+    ptt?: boolean,         // audio only — true = voice note
+    filename?: string,     // document only
+    mimetype?: string      // document only, default application/octet-stream
+  }
 
 transform     — transformasi nilai dengan ekspresi JS, input = lastOutput
   config: { expr: string, inputVar?: string }
@@ -89,7 +111,16 @@ NODE FIELDS (semua node)
   "branches": {...}   — hanya untuk condition
   "onError": "stop"|"continue"  — default "stop"
   "label":   string   — deskripsi opsional
+  "timeout": number   — opsional, milliseconds (default: 30s http, 90s ai, 60s shell, 60s lainnya)
+  "retry": {          — opsional, retry jika node gagal
+    "times":   number   — jumlah retry (0–9, default 0)
+    "delayMs": number   — jeda awal antar retry (default 1000)
+    "backoff": "fixed"|"exponential"  — default "fixed"
+  }
 }
+
+CATATAN: retry hanya direkomendasikan untuk node yang fragile (http.request, ai.call, shell).
+Jangan retry node wa.send (bisa duplikat pesan).
 
 ═══════════════════════════════════════════════
 TEMPLATE VARIABLES (gunakan {{nama}})
@@ -203,6 +234,7 @@ function validateWorkflow(wf) {
     'wa.read_group', 'transform', 'json.extract', 'condition',
     'delay', 'memory.read', 'memory.write', 'set', 'log',
     'loop', 'repeat', 'parallel', 'workflow.run',
+    'wa.transcribe', 'wa.vision', 'wa.send_media',
   ]);
 
   for (const node of wf.nodes) {
@@ -215,6 +247,20 @@ function validateWorkflow(wf) {
         if (targetId && !nodeIds.has(targetId)) {
           throw new Error(`Branch dari "${node.id}" ke "${targetId}" tidak ditemukan`);
         }
+      }
+    }
+    if (node.timeout !== undefined) {
+      if (typeof node.timeout !== 'number' || node.timeout <= 0) {
+        throw new Error(`Node "${node.id}" timeout harus number > 0 (milliseconds)`);
+      }
+    }
+    if (node.retry !== undefined) {
+      if (typeof node.retry !== 'object') throw new Error(`Node "${node.id}" retry harus object`);
+      if (node.retry.times !== undefined && (typeof node.retry.times !== 'number' || node.retry.times < 0 || node.retry.times > 9)) {
+        throw new Error(`Node "${node.id}" retry.times harus 0–9`);
+      }
+      if (node.retry.backoff && !['fixed', 'exponential'].includes(node.retry.backoff)) {
+        throw new Error(`Node "${node.id}" retry.backoff harus "fixed" atau "exponential"`);
       }
     }
   }
