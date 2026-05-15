@@ -19,13 +19,37 @@ function saveFile(buffer, originalName, tenantId) {
 async function extractText(filePath, originalName) {
   const ext = path.extname(originalName || filePath).toLowerCase();
   try {
-    if (ext === '.pdf')               return await extractPDF(filePath);
+    if (ext === '.pdf')                  return await extractPDF(filePath);
     if (['.xlsx', '.xls'].includes(ext)) return await extractExcel(filePath);
-    if (ext === '.docx')              return await extractWord(filePath);
-    if (['.txt', '.csv', '.md'].includes(ext)) return fs.readFileSync(filePath, 'utf8');
+    if (ext === '.docx')                 return await extractWord(filePath);
+    if (ext === '.doc')                  return await extractWord(filePath);
+    if (['.pptx', '.ppt'].includes(ext)) return await extractPowerPoint(filePath);
+    if (['.txt', '.csv', '.md', '.json'].includes(ext)) return fs.readFileSync(filePath, 'utf8');
     return null;
   } catch (e) {
     return `[Gagal ekstrak: ${e.message}]`;
+  }
+}
+
+async function extractPowerPoint(fp) {
+  // Use officecli if available, otherwise extract plain text from PPTX XML
+  try {
+    const AdmZip = require('adm-zip');
+    const zip    = new AdmZip(fp);
+    const slides = zip.getEntries()
+      .filter(e => e.entryName.match(/^ppt\/slides\/slide\d+\.xml$/))
+      .sort((a, b) => a.entryName.localeCompare(b.entryName));
+
+    if (!slides.length) return '[Tidak ada slide ditemukan]';
+
+    const lines = slides.map((entry, i) => {
+      const xml  = entry.getData().toString('utf8');
+      const text = xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      return `--- Slide ${i + 1} ---\n${text}`;
+    });
+    return lines.join('\n\n');
+  } catch {
+    return '[Ekstrak PowerPoint gagal — pastikan paket adm-zip terinstall]';
   }
 }
 

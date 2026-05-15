@@ -355,6 +355,14 @@ async function handleMsg(msg) {
 
     if (!text) return;
     logFn('QUERY', `[DM][${tenantId}] ${dmSender.split('@')[0]}: ${text.slice(0, 80)}`);
+
+    // Quick contact lookup shortcut — "ada no pak ramli?", "nomor pak budi?", dsb
+    const contactQuery = matchContactQuery(text);
+    if (contactQuery) {
+      await handleContactQuery(msg, jid, contactQuery, tenantId);
+      return;
+    }
+
     await handleQuery(msg, jid, text, cfg, dmSender, tenantId);
     return;
   }
@@ -429,11 +437,10 @@ async function handleMsg(msg) {
     });
   } catch {}
 
-  // ── File collector (input groups) ────────────────────────
-  const inputGroups = getInputGroups(cfg);
-  if (inputGroups.includes(jid)) {
-    const docMsg = msg.message?.documentMessage;
-    if (docMsg) await processFile(msg, docMsg, jid, tenantId);
+  // ── File collector — semua grup yang bot ikuti ───────────
+  {
+    const docMsg2 = msg.message?.documentMessage;
+    if (docMsg2) await processFile(msg, docMsg2, jid, tenantId);
   }
 
   const imgMsg    = msg.message?.imageMessage;
@@ -531,7 +538,7 @@ async function handleImageQuery(msg, jid, caption, cfg, senderJid, tenantId) {
     const answer = await analyzeImage(buffer, mime, question, cfg);
 
     await sendMsg(jid, answer, msg);
-    addTurn(jid, senderJid, `[Image] ${question}`, answer);
+    addTurn(jid, senderJid, `[Image] ${question}`, answer, tenantId);
     addToChain(jid, senderJid);
   } catch (e) {
     logFn('ERROR', `Vision error: ${e.message}`);
@@ -612,7 +619,7 @@ async function processFile(msg, docMsg, jid, tenantId) {
   const filename = docMsg.fileName || `file_${Date.now()}`;
   const size     = docMsg.fileLength || 0;
 
-  const supported = ['pdf', 'spreadsheet', 'excel', 'wordprocessingml', 'text/plain'];
+  const supported = ['pdf', 'spreadsheet', 'excel', 'wordprocessingml', 'presentationml', 'powerpoint', 'text/plain', 'msword'];
   if (!supported.some(s => mime.includes(s))) return;
 
   if (!checkSize(size)) {
@@ -726,6 +733,7 @@ async function handleQuery(msg, jid, text, cfg, senderJid, tenantId) {
 
   const tid = tenantId || 'default';
 
+
   const question = text
     .replace(/@\S+/gi, '')
     .replace(/\bbima\b/gi, '')
@@ -836,7 +844,7 @@ async function handleQuery(msg, jid, text, cfg, senderJid, tenantId) {
       sendThinking(jid, msg).catch(() => {});
     }
 
-    const history    = getHistory(jid, senderJid);
+    const history    = getHistory(jid, senderJid, tid);
     const { recall } = require('./ltm');
     const ltmContext = recall(question, 3, tid);
 
@@ -887,7 +895,7 @@ async function handleQuery(msg, jid, text, cfg, senderJid, tenantId) {
     }
 
     await sendPaged(jid, senderJid, answer, msg);
-    addTurn(jid, senderJid, question, answer);
+    addTurn(jid, senderJid, question, answer, tid);
     addToChain(jid, senderJid);
 
     try { await sock.sendPresenceUpdate('paused', jid); } catch {}
@@ -950,7 +958,7 @@ async function handleFileRequest(msg, jid, question, cfg, senderJid, wantFile, t
     await sendMsg(jid, `*Data lengkap: ${doc.file}*\n(${dateLabel(docDate)})\n\n${fullText.slice(0, 4000)}`, msg);
   }
 
-  addTurn(jid, senderJid, question, `[File terkirim: ${doc.file}]`);
+  addTurn(jid, senderJid, question, `[File terkirim: ${doc.file}]`, tid);
   addToChain(jid, senderJid);
 }
 
@@ -966,6 +974,9 @@ async function sendFile(jid, fileName, quoted = null, tenantId) {
     xls:  'application/vnd.ms-excel',
     pdf:  'application/pdf',
     docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    doc:  'application/msword',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ppt:  'application/vnd.ms-powerpoint',
     csv:  'text/csv',
     txt:  'text/plain',
   };
@@ -1004,6 +1015,34 @@ async function sendMsg(jid, text, quoted = null, attempt = 1) {
       }
     }
   }
+}
+
+// ── Contact query helpers ─────────────────────────────────────
+// Returns the searched name if the message is a contact lookup, else null
+function matchContactQuery(text) {
+  const t = text.trim();
+  // Patterns: "ada no X?", "nomor X?", "no hp X?", "kontak X?", "nomer X?", "carikan no X"
+  const patterns = [
+    /(?:ada\s+)?(?:no|nomor|nomer|no\.?\s*hp|no\.?\s*wa|no\.?\s*telp|kontak|contact)\s+(?:dari\s+)?(.+?)(?:\?|$)/i,
+    /(?:carikan?|cari|cek)\s+(?:no|nomor|nomer|kontak)\s+(?:dari\s+)?(.+?)(?:\?|$)/i,
+    /(?:berapa|apa)\s+(?:no|nomor|nomer|kontak)\s+(?:dari\s+)?(.+?)(?:\?|$)/i,
+  ];
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (m) return m[1].trim();
+  }
+  return null;
+}
+
+async function handleContactQuery(msg, jid, name, tenantId) {
+  const { lookupContact } = require('./contacts');
+  const results = lookupContact(name, tenantId || 'default');
+  if (!results.length) {
+    await sendMsg(jid, `Maaf, kontak dengan nama *${name}* tidak ditemukan dalam buku kontak.`, msg);
+    return;
+  }
+  const lines = results.map(c => `• *${c.name}*\n  Nomor: ${c.phone}`);
+  await sendMsg(jid, `Berikut informasi kontak yang ditemukan:\n\n${lines.join('\n\n')}`, msg);
 }
 
 function getWAStatus() { return state; }

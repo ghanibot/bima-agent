@@ -80,6 +80,7 @@ function cmdHelp() {
     ['/input',     'Pilih grup WhatsApp sebagai input'],
     ['/output',    'Pilih grup WhatsApp sebagai output'],
     ['/knowledge', 'Lihat dokumen tersimpan'],
+    ['/contacts',  'Kelola buku kontak (nama → nomor telepon)'],
     ['/compact',   'Kompres konteks dokumen (hemat token)'],
     ['/stt',       'Konfigurasi Speech-to-Text (voice note)'],
     ['/tts',       'Konfigurasi Text-to-Speech (suara Bima)'],
@@ -161,16 +162,18 @@ async function cmdWA() {
 async function cmdModel() {
   const { PROVIDER_NAMES } = require('./ai');
 
+  // 6 provider utama (urutan ditampilkan pertama), lalu provider tambahan
   const PROV = [
-    { id: 'openrouter', ex: 'meta-llama/llama-3.1-8b-instruct:free', needKey: true,  needUrl: false },
+    { id: 'anthropic',  ex: 'claude-sonnet-4-6',                     needKey: true,  needUrl: false },
     { id: 'openai',     ex: 'gpt-4o-mini',                           needKey: true,  needUrl: false },
-    { id: 'anthropic',  ex: 'claude-3-haiku-20240307',               needKey: true,  needUrl: false },
     { id: 'gemini',     ex: 'gemini-1.5-flash',                      needKey: true,  needUrl: false },
+    { id: 'openrouter', ex: 'meta-llama/llama-3.1-8b-instruct:free', needKey: true,  needUrl: false },
     { id: 'groq',       ex: 'llama-3.1-8b-instant',                  needKey: true,  needUrl: false },
+    { id: 'ollama',     ex: 'llama3',                                 needKey: false, needUrl: true  },
+    // ── Provider Tambahan ─────────────────────────────────────
     { id: 'mistral',    ex: 'mistral-small-latest',                   needKey: true,  needUrl: false },
     { id: 'deepseek',   ex: 'deepseek-chat',                         needKey: true,  needUrl: false },
     { id: 'together',   ex: 'meta-llama/Llama-3-8b-chat-hf',        needKey: true,  needUrl: false },
-    { id: 'ollama',     ex: 'llama3',                                 needKey: false, needUrl: true  },
     { id: 'lmstudio',   ex: 'local-model',                           needKey: false, needUrl: true  },
     { id: 'compat',     ex: 'my-model',                              needKey: false, needUrl: true  },
   ];
@@ -316,6 +319,57 @@ function cmdKnowledge() {
 
   out += '─'.repeat(40);
   println(out);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  /contacts
+// ══════════════════════════════════════════════════════════════
+async function cmdContacts() {
+  const { listContacts, saveContact, deleteContact, lookupContact } = require('./contacts');
+
+  const actionIdx = await ui.selectMenu('KONTAK — Pilih Aksi', [
+    { label: 'Lihat semua kontak',   desc: 'tampilkan buku kontak' },
+    { label: 'Tambah kontak baru',   desc: 'simpan nama & nomor' },
+    { label: 'Cari kontak',          desc: 'cari berdasarkan nama/nomor' },
+    { label: 'Hapus kontak',         desc: 'hapus dari buku kontak' },
+  ]);
+  if (actionIdx === null) { println('Dibatalkan.'); return; }
+
+  if (actionIdx === 0) {
+    const contacts = listContacts(_currentTenant);
+    if (!contacts.length) { println('Buku kontak masih kosong.'); return; }
+    let out = `KONTAK — ${contacts.length} entri\n` + '─'.repeat(40) + '\n';
+    contacts.forEach((c, i) => {
+      out += `  ${String(i + 1).padStart(2)}. ${c.name.padEnd(25)} ${c.phone}\n`;
+    });
+    out += '─'.repeat(40);
+    println(out);
+
+  } else if (actionIdx === 1) {
+    const name  = (await ask(' Nama (contoh: Pak Ramli): ')).trim();
+    if (!name) { println('✗ Nama tidak boleh kosong.'); return; }
+    const phone = (await ask(' Nomor telepon (contoh: 082171827205 atau +6282171827205): ')).trim();
+    if (!phone) { println('✗ Nomor tidak boleh kosong.'); return; }
+    const saved = saveContact(name, phone, _currentTenant);
+    println(`✓ Kontak "${name}" disimpan: ${saved}`);
+
+  } else if (actionIdx === 2) {
+    const query   = (await ask(' Cari nama/nomor: ')).trim();
+    if (!query) return;
+    const results = lookupContact(query, _currentTenant);
+    if (!results.length) { println(`Tidak ada kontak yang cocok dengan "${query}".`); return; }
+    results.forEach((c, i) => println(`  ${i + 1}. ${c.name} → ${c.phone}`));
+
+  } else if (actionIdx === 3) {
+    const contacts = listContacts(_currentTenant);
+    if (!contacts.length) { println('Buku kontak masih kosong.'); return; }
+    const idx = await ui.selectMenu('KONTAK — Pilih yang Dihapus',
+      contacts.map(c => ({ label: c.name, desc: c.phone }))
+    );
+    if (idx === null) { println('Dibatalkan.'); return; }
+    deleteContact(contacts[idx].name, _currentTenant);
+    println(`✓ Kontak "${contacts[idx].name}" dihapus.`);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1153,6 +1207,7 @@ async function main() {
       else if (line === '/input')          { await cmdSetGroup('input'); }
       else if (line === '/output')         { await cmdSetGroup('output'); }
       else if (line === '/knowledge')      { cmdKnowledge(); }
+      else if (line === '/contacts')       { await cmdContacts(); }
       else if (line === '/compact')        { await cmdCompact(); }
       else if (line === '/stt')            { await cmdSTT(); }
       else if (line === '/watch' || line.startsWith('/watch ')) {

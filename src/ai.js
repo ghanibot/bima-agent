@@ -17,17 +17,22 @@ const OAI_COMPAT = {
   compat:     cfg => `${(cfg.baseUrl || '').replace(/\/$/, '')}/v1`,
 };
 
+// Provider yang ditampilkan pertama saat setup /model
+const PRIMARY_PROVIDERS = ['anthropic', 'openai', 'gemini', 'openrouter', 'groq', 'ollama'];
+
 const PROVIDER_NAMES = {
-  openai:     'OpenAI',
-  anthropic:  'Anthropic',
+  // ── 6 Provider Utama ─────────────────────────────────────────
+  anthropic:  'Claude (Anthropic)',
+  openai:     'OpenAI (GPT)',
   gemini:     'Google Gemini',
   openrouter: 'OpenRouter (100+ model)',
   groq:       'Groq (cepat & gratis)',
+  ollama:     'Ollama (lokal/cloud)',
+  // ── Provider Tambahan ────────────────────────────────────────
   mistral:    'Mistral AI',
   together:   'Together AI',
   deepseek:   'DeepSeek',
   fireworks:  'Fireworks AI',
-  ollama:     'Ollama (lokal)',
   lmstudio:   'LM Studio (lokal)',
   compat:     'OpenAI-compatible (custom URL)',
 };
@@ -216,5 +221,5 @@ async function analyzeImage(imageBuffer, mimeType, caption, cfgOverride) {
 
 module.exports = {
   callAI, testAI, answerQuestion, structureText, compactContext, analyzeImage,
-  PROVIDER_NAMES, NO_KEY_PROVIDERS, OAI_COMPAT,
+  PROVIDER_NAMES, PRIMARY_PROVIDERS, NO_KEY_PROVIDERS, OAI_COMPAT,
 };

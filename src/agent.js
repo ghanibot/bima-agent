@@ -15,29 +15,36 @@ function buildSystemPrompt(cfg) {
   const { langInstruction } = require('./languages');
   const langSuffix = cfg?.language ? langInstruction(cfg.language) : '';
 
-  return `Kamu adalah Bima, WhatsApp AI Agent dari Indonesia yang cerdas, adaptif, dan selalu membantu.${langSuffix}
+  return `Kamu adalah *Bima Agent*, asisten AI WhatsApp dari Indonesia yang cerdas, profesional, dan selalu siap membantu.${langSuffix}
+
+Gaya bicara: sopan, formal namun tetap natural dan bersahabat. Gunakan bahasa Indonesia yang baik dan benar. Hindari bahasa gaul berlebihan. Boleh sesekali santai, tetapi tetap terkesan profesional.
 
 ⚠️ KONTEKS WAKTU: Sekarang ${now} WIB.
-⚠️ KNOWLEDGE CUTOFF: Training-mu berakhir awal 2024 — data setelah itu TIDAK kamu ketahui.
+⚠️ KNOWLEDGE CUTOFF: Training berakhir awal 2024 — data setelah itu tidak tersedia tanpa pencarian web.
 
 TOOLS TERSEDIA:
-1.  search_kb(query)          - Cari di knowledge base internal (dokumen, harga, data bisnis)
-2.  get_file(filename)        - Ambil isi lengkap file tertentu dari KB
-3.  compare_files(query)      - Bandingkan data dari beberapa file sekaligus
-4.  get_price(asset)          - Harga realtime crypto/saham via API
-5.  web_search(query)         - Cari info terkini di internet (DDG + baca halaman)
-6.  browse_url(url)           - Buka & baca konten halaman web tertentu
-7.  deep_research(topic)      - Riset mendalam multi-sumber untuk topik kompleks
-8.  list_files()              - Daftar semua file di knowledge base
-9.  recall_memory(query)      - Cari fakta dari memori jangka panjang
-10. remember(content)         - Simpan fakta penting ke memori jangka panjang
-11. update_kb(hash,field,val) - Update field di dokumen KB
-12. get_group_log(hours)      - Ambil log percakapan grup N jam terakhir
-13. get_person_location(name) - Cari lokasi terakhir seseorang dari log grup
-14. get_polymarket(query)          - Cari pasar prediksi di Polymarket (trending/topik tertentu)
-15. get_my_mentions(hours)         - Siapa yang men-tag/mention user ini di semua grup (N jam terakhir, default 24)
-16. get_conversation_patterns(hours) - Pola percakapan di grup: siapa ngobrol dengan siapa
-17. final_answer(text)             - Kirim jawaban akhir ke user
+1.  search_kb(query)              - Cari di knowledge base internal (dokumen, harga, data bisnis)
+2.  get_file(filename)            - Ambil isi lengkap file tertentu dari KB
+3.  compare_files(query)          - Bandingkan data dari beberapa file sekaligus
+4.  get_price(asset)              - Harga realtime crypto/saham via API
+5.  web_search(query)             - Cari info terkini di internet
+6.  browse_url(url)               - Buka & baca konten halaman web
+7.  deep_research(topic)          - Riset mendalam multi-sumber
+8.  list_files()                  - Daftar semua file di knowledge base
+9.  recall_memory(query)          - Cari fakta dari memori jangka panjang
+10. remember(content)             - Simpan fakta penting ke memori jangka panjang
+11. update_kb(hash,field,val)     - Update field di dokumen KB
+12. get_group_log(hours)          - Ambil log percakapan grup N jam terakhir
+13. get_person_location(name)     - Cari lokasi terakhir seseorang dari log grup
+14. get_polymarket(query)         - Cari pasar prediksi di Polymarket
+15. get_my_mentions(hours)        - Siapa yang men-tag/mention user ini di semua grup
+16. get_conversation_patterns(hours) - Pola percakapan: siapa ngobrol dengan siapa
+17. lookup_contact(name)          - Cari nomor telepon kontak berdasarkan nama
+18. save_contact(name,phone)      - Simpan nomor telepon kontak baru
+19. list_contacts()               - Tampilkan semua kontak yang tersimpan
+20. delete_contact(name)          - Hapus kontak dari buku kontak
+21. edit_office(command)          - Manipulasi file Excel/Word/PowerPoint (buat, edit, baca)
+22. final_answer(text)            - Kirim jawaban akhir ke pengguna
 
 FORMAT RESPONS - balas HANYA JSON valid, tidak ada teks lain:
 {"thought":"pikirku singkat","action":"nama_tool","input":"parameter"}
@@ -45,35 +52,35 @@ FORMAT RESPONS - balas HANYA JSON valid, tidak ada teks lain:
 Jawaban final:
 {"thought":"sudah cukup info","action":"final_answer","input":"teks jawaban"}
 
-FORMAT DATA (WhatsApp):
+FORMAT DATA (WhatsApp — bukan web):
 - DILARANG tabel markdown
-- List pakai nomor atau bullet
+- Gunakan list bernomor atau bullet
 - Label penting pakai *bold*
+- Nomor telepon tampilkan dengan format: +62xxxxxxxxxx
 
 ATURAN TOOL — PRIORITAS WAJIB:
-1. Data operasional/bisnis/internal (ongkos, harga jasa, jadwal, tarif, SOP, laporan) → search_kb DULU. JANGAN web_search untuk data internal.
-   - Jika search_kb kosong → jawab: "Data [X] belum ada di knowledge base. Silakan minta admin upload file datanya."
-2. Harga crypto/saham → get_price (bukan web_search)
-3. Fakta dunia terkini (pemimpin, pejabat, CEO, berita, hasil pemilu, rekor) → web_search DULU, baru jawab
-4. Topik kompleks/analitis → deep_research
-5. User kirim link → browse_url
-6. Prediksi pasar / probabilitas event → get_polymarket
-7. "Siapa yang tag/sebut/mention/panggil saya?" → get_my_mentions(jam) — WAJIB pakai ini, jangan coba jawab dari memori
-8. "Siapa ngobrol sama siapa / pola percakapan grup" → get_conversation_patterns(jam)
-9. Percakapan biasa/math → langsung final_answer (tidak perlu search)
+1. Data operasional/bisnis/internal → search_kb DULU. JANGAN web_search untuk data internal.
+   - Jika tidak ada → beritahu: "Data [X] belum tersedia di knowledge base."
+2. Pertanyaan nomor/kontak seseorang → lookup_contact DULU sebelum hal lain
+3. Harga crypto/saham → get_price
+4. Fakta dunia terkini → web_search
+5. Topik kompleks/analitis → deep_research
+6. User kirim link → browse_url
+7. Prediksi pasar → get_polymarket
+8. "Siapa yang tag/mention saya?" → get_my_mentions
+9. "Siapa ngobrol dengan siapa?" → get_conversation_patterns
+10. Percakapan biasa/math → langsung final_answer
 
-ATURAN JAWABAN — WAJIB:
-- Setiap jawaban HARUS ditutup dengan 1-2 saran, alternatif, atau langkah lanjutan yang relevan.
-- Format saran: "💡 *Saran:* ..." atau "📌 *Alternatif:* ..."
-- Contoh: setelah jawab harga, sarankan cara nego / waktu terbaik beli.
-- Contoh: setelah jawab info operasional, sarankan efisiensi atau pilihan lain.
-- Jika user tanya yang tidak ada di KB → sarankan data apa yang perlu di-upload.
-- Jangan tutup jawaban tanpa saran kecuali pertanyaan trivial (salam, terima kasih).
+ATURAN JAWABAN:
+- Setiap jawaban HARUS diakhiri dengan 1-2 saran atau langkah lanjutan yang relevan.
+- Format saran: "💡 *Saran:* ..." atau "📌 *Info tambahan:* ..."
+- Jika informasi tidak ada di KB → sarankan data yang perlu diunggah.
+- Pengecualian: pertanyaan sapaan atau terima kasih tidak perlu saran tambahan.
 `;
 }
 
 // Search-type tools — trigger "sedang mencari" indicator
-const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket', 'get_my_mentions', 'get_conversation_patterns']);
+const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket', 'get_my_mentions', 'get_conversation_patterns', 'lookup_contact', 'list_contacts', 'edit_office']);
 
 // ── Main agent loop ───────────────────────────────────────────
 // onToolCall(action, input) — optional async callback before each tool executes
@@ -393,6 +400,60 @@ async function executeTool(action, input, tools, tenantId) {
         out += `*Sering berinteraksi:*\n${patterns.topPairs.map(x => `• ${x}`).join('\n')}`;
       }
       return out;
+    }
+
+    case 'lookup_contact': {
+      const { lookupContact } = require('./contacts');
+      const results = lookupContact(String(input), tid);
+      if (!results.length) return `Kontak dengan nama "${input}" tidak ditemukan dalam buku kontak.`;
+      return results.map(c => `• *${c.name}*: ${c.phone}`).join('\n');
+    }
+
+    case 'save_contact': {
+      const { saveContact } = require('./contacts');
+      let name, phone;
+      if (typeof input === 'object') {
+        name  = input.name;
+        phone = input.phone;
+      } else {
+        const str = String(input);
+        // Try JSON first
+        try {
+          const parsed = JSON.parse(str);
+          name  = parsed.name;
+          phone = parsed.phone;
+        } catch {
+          // Format: "nama, nomor" or "nama: nomor"
+          const parts = str.split(/[,:]/).map(s => s.trim());
+          name  = parts[0];
+          phone = parts[1];
+        }
+      }
+      if (!name || !phone) return 'Format tidak valid. Gunakan: {"name":"Pak Ramli","phone":"+6282171827205"}';
+      const saved = saveContact(name, phone, tid);
+      return `Kontak *${name}* berhasil disimpan dengan nomor ${saved}.`;
+    }
+
+    case 'list_contacts': {
+      const { listContacts } = require('./contacts');
+      const contacts = listContacts(tid);
+      if (!contacts.length) return 'Belum ada kontak yang tersimpan.';
+      return `*Buku Kontak (${contacts.length}):*\n\n` +
+        contacts.map((c, i) => `${i + 1}. *${c.name}*: ${c.phone}`).join('\n');
+    }
+
+    case 'delete_contact': {
+      const { deleteContact } = require('./contacts');
+      const ok = deleteContact(String(input), tid);
+      return ok ? `Kontak "${input}" berhasil dihapus.` : `Kontak "${input}" tidak ditemukan.`;
+    }
+
+    case 'edit_office': {
+      const { officeCommand } = require('./officecli');
+      const { tenantPaths }   = require('./tenant');
+      const filesDir = tenantPaths(tid).files;
+      const result   = await officeCommand(String(input), filesDir);
+      return result;
     }
 
     default:

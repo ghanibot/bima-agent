@@ -1,7 +1,7 @@
 {
   "name": "bima-agent",
   "version": "1.0.0",
-  "description": "WhatsApp AI Agent CLI for Indonesia — multi-tenant, plugin system, semantic search, web research & voice notes",
+  "description": "Bima Agent — WhatsApp AI Agent untuk Indonesia: multi-grup, buku kontak, baca dokumen, OfficeCLI, 6 provider AI",
   "main": "src/cli.js",
   "bin": {
     "bima": "bin/bima.js"
@@ -36,7 +36,8 @@
     "node-telegram-bot-api": "^0.66.0",
     "pdf-parse": "^1.1.1",
     "qrcode-terminal": "^0.12.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "adm-zip": "^0.5.16"
   },
   "optionalDependencies": {
     "@xenova/transformers": "^2.17.2"
