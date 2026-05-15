@@ -7,6 +7,7 @@ const path = require('path');
 
 const { getConfig, saveConfig, maskKey } = require('./config');
 const { startWA, getWAStatus, logoutWA, sendWAMessage } = require('./whatsapp');
+const { startNano, stopNano } = require('./nano');
 const { getKnowledge, searchKnowledge, searchKnowledgeSemantic, compactKnowledge } = require('./db');
 const { testAI, answerQuestion } = require('./ai');
 const { listTenants, addTenant, updateTenant, deleteTenant, getTenant, tenantPaths } = require('./tenant');
@@ -80,7 +81,8 @@ function cmdHelp() {
     ['/input',     'Pilih grup WhatsApp sebagai input'],
     ['/output',    'Pilih grup WhatsApp sebagai output'],
     ['/knowledge', 'Lihat dokumen tersimpan'],
-    ['/contacts',  'Kelola buku kontak (nama → nomor telepon)'],
+    ['/contacts',   'Kelola buku kontak (nama → nomor telepon)'],
+    ['/blacklist',  'Lihat/hapus nomor yang diblacklist (guard)'],
     ['/compact',   'Kompres konteks dokumen (hemat token)'],
     ['/stt',       'Konfigurasi Speech-to-Text (voice note)'],
     ['/tts',       'Konfigurasi Text-to-Speech (suara Bima)'],
@@ -209,8 +211,34 @@ async function cmdModel() {
   }
   if (!ok) println('⚠ Koneksi lokal gagal — pastikan server running.');
 
-  saveConfig(cfg, _currentTenant);
-  println(`✓ Disimpan!\n  Provider : ${prov.id}\n  Model    : ${model}${baseUrl ? '\n  Base URL : ' + baseUrl : ''}${apiKey ? '\n  API Key  : ' + maskKey(apiKey) : ''}`);
+  // Ask for fallback provider (optional)
+  println('');
+  println('Opsional: set provider fallback (dipakai jika provider utama rate-limit/error).');
+  const wantFallback = (await ask(' Tambah fallback provider? (y/N): ')).trim().toLowerCase();
+  let fallbackProvider = '', fallbackApiKey = '', fallbackModel = '';
+
+  if (wantFallback === 'y' || wantFallback === 'ya') {
+    const fbItems = PROV.filter(p => p.id !== prov.id).map(p => ({ label: PROVIDER_NAMES[p.id] || p.id, desc: p.ex }));
+    const fbIdx   = await ui.selectMenu('MODEL — Pilih Fallback Provider', fbItems);
+    if (fbIdx !== null) {
+      const fbProvList = PROV.filter(p => p.id !== prov.id);
+      const fbProv = fbProvList[fbIdx];
+      fallbackModel = (await ask(` Fallback model (Enter = ${fbProv.ex}): `)).trim() || fbProv.ex;
+      if (fbProv.needKey) {
+        fallbackApiKey = (await ask(' Fallback API Key: ')).trim();
+      }
+      fallbackProvider = fbProv.id;
+      println(`✓ Fallback: ${fbProv.id} / ${fallbackModel}`);
+    }
+  }
+
+  const cfgToSave = {
+    provider: prov.id, model, apiKey,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(fallbackProvider ? { fallbackProvider, fallbackApiKey, fallbackModel } : {}),
+  };
+  saveConfig(cfgToSave, _currentTenant);
+  println(`✓ Disimpan!\n  Provider : ${prov.id}\n  Model    : ${model}${baseUrl ? '\n  Base URL : ' + baseUrl : ''}${apiKey ? '\n  API Key  : ' + maskKey(apiKey) : ''}${fallbackProvider ? '\n  Fallback : ' + fallbackProvider + ' / ' + fallbackModel : ''}`);
   ui.updateStatus({ provider: prov.id, model, waConnected: getWAStatus().connected, tenant: _currentTenant });
 }
 
@@ -370,6 +398,32 @@ async function cmdContacts() {
     deleteContact(contacts[idx].name, _currentTenant);
     println(`✓ Kontak "${contacts[idx].name}" dihapus.`);
   }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  /blacklist
+// ══════════════════════════════════════════════════════════════
+function cmdBlacklist(args) {
+  const { listBlacklist, removeFromBlacklist } = require('./blacklist');
+
+  if (args[0] === 'del') {
+    const no = args[1];
+    if (!no) { println('Contoh: /blacklist del 628123456789'); return; }
+    const ok = removeFromBlacklist(no);
+    println(ok ? `✓ Nomor ${no} dihapus dari blacklist.` : `✗ Nomor ${no} tidak ada di blacklist.`);
+    return;
+  }
+
+  const list = listBlacklist();
+  if (!list.length) { println('Blacklist kosong — tidak ada nomor yang diblacklist.'); return; }
+
+  let out = `BLACKLIST — ${list.length} nomor\n` + '─'.repeat(40) + '\n';
+  list.forEach((e, i) => {
+    const date = e.addedAt ? e.addedAt.slice(0, 16).replace('T', ' ') : '?';
+    out += `  ${i + 1}. +${e.phone}\n     Alasan: ${e.reason} | ${date}\n`;
+  });
+  out += '─'.repeat(40) + '\nHapus: /blacklist del <nomor>';
+  println(out);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1158,6 +1212,12 @@ async function main() {
     }
   }, 3000);
 
+  // Start nano sidecar (memory + guard + proxy) in background
+  startNano(log).then(({ sidecar, proxy }) => {
+    if (sidecar) ui.log('INFO', 'nano-memory & nano-guard aktif ✓');
+    if (proxy)   ui.log('INFO', 'nano-proxy aktif ✓');
+  }).catch(() => {});
+
   // Auto-connect WA if session exists
   const authDir = process.env.BIMA_DATA
     ? path.join(process.env.BIMA_DATA, 'auth')
@@ -1208,6 +1268,10 @@ async function main() {
       else if (line === '/output')         { await cmdSetGroup('output'); }
       else if (line === '/knowledge')      { cmdKnowledge(); }
       else if (line === '/contacts')       { await cmdContacts(); }
+      else if (line === '/blacklist' || line.startsWith('/blacklist ')) {
+        const parts = line.slice(10).trim().split(/\s+/).filter(Boolean);
+        cmdBlacklist(parts);
+      }
       else if (line === '/compact')        { await cmdCompact(); }
       else if (line === '/stt')            { await cmdSTT(); }
       else if (line === '/watch' || line.startsWith('/watch ')) {

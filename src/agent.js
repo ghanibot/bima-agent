@@ -146,7 +146,11 @@ async function runAgent(question, history, cfg, ltmContext, onToolCall, tenantId
 
     let raw;
     try {
-      raw = await callAI(agentMessages, buildSystemPrompt(cfg), cfg);
+      // Blacklisted sender → use cheap/fast model to save cost
+      const activeCfg = cfg._useBlacklistModel
+        ? { ...cfg, provider: cfg.fallbackProvider || 'groq', apiKey: cfg.fallbackApiKey || cfg.apiKey, model: cfg.fallbackModel || 'llama-3.1-8b-instant' }
+        : cfg;
+      raw = await callAI(agentMessages, buildSystemPrompt(cfg), activeCfg);
     } catch (e) {
       if (steps.length === 0) {
         try {

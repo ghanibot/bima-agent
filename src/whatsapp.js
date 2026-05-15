@@ -468,6 +468,33 @@ async function handleMsg(msg) {
   if (isMention || isReply || hasTrigger || isChained) {
     logFn('QUERY', `[${jid}][${tenantId}] ${text.slice(0, 80)}`);
 
+    // ── nano-guard: scan for prompt injection / toxic ─────
+    try {
+      const { nanoGuard }       = require('./nano');
+      const { isBlacklisted, addToBlacklist } = require('./blacklist');
+      if (nanoGuard.isAvailable() && text) {
+        const scanResult = await nanoGuard.scan(text);
+        if (scanResult.blocked) {
+          const cats = (scanResult.categories || []).map(c => String(c).replace('ViolationType.', '')).join(', ');
+          addToBlacklist(sender, cats || 'violation');
+          logFn('WARN', `[GUARD] Blacklist: ${sender.split('@')[0]} — ${cats}`);
+          await sendMsg(jid,
+            `Maaf, pesan Anda mengandung konten yang tidak diizinkan: *${cats || 'pelanggaran'}*.\n` +
+            `Akun Anda telah dicatat. Silakan hubungi admin jika ini kesalahan.`,
+            msg
+          );
+          return;
+        }
+        if (isBlacklisted(sender)) {
+          // Blacklisted sender: respond using cheapest model
+          logFn('DEBUG', `[GUARD] Blacklisted sender — cheap model: ${sender.split('@')[0]}`);
+          cfg._useBlacklistModel = true;
+        }
+      }
+    } catch (e) {
+      logFn('DEBUG', `Guard scan skip: ${e.message}`);
+    }
+
     // ── Summary intent: rekap/summary grup ───────────────
     const isSummaryIntent = /\b(rekap|summary|rangkum|ringkas)\s*(grup|percakapan|chat|hari\s*ini|24\s*jam|kemarin)?\b/i.test(text);
     if (isSummaryIntent) {

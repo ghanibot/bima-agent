@@ -40,15 +40,38 @@ const PROVIDER_NAMES = {
 // Providers that don't need an API key
 const NO_KEY_PROVIDERS = new Set(['ollama', 'lmstudio']);
 
+// ── nano-proxy URL resolver ────────────────────────────────────
+// Maps provider → nano-proxy path prefix
+const PROXY_PATHS = {
+  anthropic:  'anthropic',
+  openai:     'openai',
+  groq:       'groq',
+  gemini:     'gemini',
+  mistral:    'mistral',
+  ollama:     'ollama',
+};
+
+function _proxyBaseUrl(provider) {
+  try {
+    const { nanoProxy } = require('./nano');
+    if (nanoProxy.isAvailable() && PROXY_PATHS[provider]) {
+      return `http://127.0.0.1:${nanoProxy.getPort()}/${PROXY_PATHS[provider]}`;
+    }
+  } catch {}
+  return null;
+}
+
 // ── Build HTTP request ─────────────────────────────────────────
 function buildReq(cfg, messages, system) {
   const { provider, model, apiKey, baseUrl } = cfg;
   const sys = system || 'Kamu adalah Bima, asisten AI cerdas. Jawab to the point.';
+  const proxyBase = _proxyBaseUrl(provider);
 
   // Anthropic — different format
   if (provider === 'anthropic') {
+    const url = proxyBase ? `${proxyBase}/v1/messages` : 'https://api.anthropic.com/v1/messages';
     return {
-      url: 'https://api.anthropic.com/v1/messages',
+      url,
       headers: {
         'Content-Type':      'application/json',
         'x-api-key':         apiKey,
@@ -59,11 +82,10 @@ function buildReq(cfg, messages, system) {
     };
   }
 
-  // Google Gemini — different format
+  // Google Gemini — different format (no proxy support yet)
   if (provider === 'gemini') {
     const geminiMessages = messages.map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
-      // Array content = already-formatted parts (e.g. image blocks from buildImageContent)
       parts: Array.isArray(m.content)
         ? m.content
         : [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }],
@@ -84,7 +106,8 @@ function buildReq(cfg, messages, system) {
   const baseUrlFn = OAI_COMPAT[provider];
   if (!baseUrlFn) throw new Error(`Provider tidak dikenal: ${provider}`);
 
-  const base    = baseUrlFn(cfg);
+  // Use nano-proxy if available, else direct API
+  const base = proxyBase ? `${proxyBase}/v1` : baseUrlFn(cfg);
   const headers = {
     'Content-Type':  'application/json',
     'Authorization': `Bearer ${apiKey || 'ollama'}`,
@@ -125,12 +148,8 @@ function parseReply(req, data) {
   return data?.choices?.[0]?.message?.content || null;
 }
 
-// ── Core call ──────────────────────────────────────────────────
-async function callAI(messages, system, cfgOverride) {
-  const cfg = cfgOverride || getConfig();
-  if (!cfg.provider) throw new Error('AI belum dikonfigurasi. Ketik /model');
-  if (!cfg.apiKey && !NO_KEY_PROVIDERS.has(cfg.provider)) throw new Error('API key belum diset. Ketik /model');
-
+// ── Core call (single provider) ───────────────────────────────
+async function _callOnce(cfg, messages, system) {
   const req = buildReq(cfg, messages, system);
   const res = await fetch(req.url, {
     method:  'POST',
@@ -140,11 +159,43 @@ async function callAI(messages, system, cfgOverride) {
   });
 
   const data = await res.json();
-  if (!res.ok) throw new Error(`API ${res.status}: ${data?.error?.message || data?.message || JSON.stringify(data).slice(0, 200)}`);
+  if (!res.ok) {
+    const errMsg = data?.error?.message || data?.message || JSON.stringify(data).slice(0, 200);
+    const err = new Error(`API ${res.status}: ${errMsg}`);
+    err.status = res.status;
+    throw err;
+  }
 
   const reply = parseReply(req, data);
   if (!reply) throw new Error('Respons AI kosong');
   return reply;
+}
+
+// ── callAI: with per-tenant fallback support ──────────────────
+async function callAI(messages, system, cfgOverride) {
+  const cfg = cfgOverride || getConfig();
+  if (!cfg.provider) throw new Error('AI belum dikonfigurasi. Ketik /model');
+  if (!cfg.apiKey && !NO_KEY_PROVIDERS.has(cfg.provider)) throw new Error('API key belum diset. Ketik /model');
+
+  // Try primary provider
+  try {
+    return await _callOnce(cfg, messages, system);
+  } catch (primaryErr) {
+    // Try fallback if configured and primary was rate-limited or server error
+    const isRetryable = primaryErr.status === 429 || primaryErr.status >= 500;
+    if (isRetryable && cfg.fallbackProvider && (cfg.fallbackApiKey || NO_KEY_PROVIDERS.has(cfg.fallbackProvider))) {
+      const fallbackCfg = {
+        ...cfg,
+        provider: cfg.fallbackProvider,
+        apiKey:   cfg.fallbackApiKey || '',
+        model:    cfg.fallbackModel || cfg.model,
+      };
+      try {
+        return await _callOnce(fallbackCfg, messages, system);
+      } catch {}
+    }
+    throw primaryErr;
+  }
 }
 
 // ── Test connection ────────────────────────────────────────────
