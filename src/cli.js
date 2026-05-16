@@ -16,6 +16,12 @@ const { runOnboarding } = require('./onboarding');
 const ui      = require('./ui');
 const plugins = require('./plugins');
 
+// ══════════════════════════════════════════════════════════════
+//  Non-interactive CLI args (run before UI init)
+//  Usage: `node src/cli.js daemon start|stop|status|restart|logs`
+// ══════════════════════════════════════════════════════════════
+const _NONINTERACTIVE = process.argv[2] === 'daemon';
+
 // Active tenant for CLI operations
 let _currentTenant = 'default';
 
@@ -96,6 +102,7 @@ function cmdHelp() {
     ['/polymarket','Cari pasar prediksi di Polymarket'],
     ['/api',        'REST API + Web Admin panel (start/stop/key/status)'],
     ['/admin',      'Buka Admin Panel di browser (perlu /api start dulu)'],
+    ['/daemon',     'Background mode: start/stop/status/restart/logs (tanpa terminal)'],
     ['/admin-notify','Set nomor WA admin yang akan diberitahu jika workflow gagal berulang'],
     ['/tg',        'Kelola Telegram bot (token/start/stop/status)'],
     ['/tenant',    'Kelola tenant (list/add/switch/del/groups)'],
@@ -1818,6 +1825,145 @@ function openInBrowser(url) {
   });
 }
 
+// ══════════════════════════════════════════════════════════════
+//  /daemon — background process control
+// ══════════════════════════════════════════════════════════════
+async function cmdDaemon(args) {
+  const sub = (args[0] || 'status').toLowerCase();
+
+  const DATA_DIR = process.env.BIMA_DATA || path.join(os.homedir(), '.bima');
+  const PID_PATH = path.join(DATA_DIR, 'daemon.pid');
+  const LOG_PATH = path.join(DATA_DIR, 'daemon.log');
+
+  function _pidAlive(pid) {
+    try { process.kill(pid, 0); return true; }
+    catch (e) { return e.code === 'EPERM'; }
+  }
+  function _readPid() {
+    try {
+      const pid = parseInt(fs.readFileSync(PID_PATH, 'utf8'), 10);
+      return pid > 0 ? pid : null;
+    } catch { return null; }
+  }
+  function _emit(msg) {
+    if (_NONINTERACTIVE) console.log(msg);
+    else println(msg);
+  }
+
+  if (sub === 'start') {
+    const existing = _readPid();
+    if (existing && _pidAlive(existing)) {
+      _emit(`✗ Daemon sudah berjalan (PID: ${existing}). Stop dulu via "node src/cli.js daemon stop".`);
+      return;
+    }
+
+    const { spawn } = require('child_process');
+    const daemonPath = path.join(__dirname, 'daemon.js');
+
+    _emit('Memulai Bima daemon...');
+    const child = spawn(process.execPath, [daemonPath], {
+      detached: true,
+      stdio:    'ignore',
+      windowsHide: true,
+      cwd:      path.join(__dirname, '..'),
+      env:      { ...process.env },
+    });
+    child.unref();
+
+    // Wait up to 8s for port to bind
+    const cfg = getConfig();
+    const port = cfg.apiPort || 3000;
+    const http = require('http');
+    let bound = false;
+    for (let i = 0; i < 16; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        await new Promise((resolve, reject) => {
+          const req = http.get(`http://localhost:${port}/api/status`, res => { res.resume(); resolve(); });
+          req.on('error', reject);
+          req.setTimeout(800, () => req.destroy(new Error('timeout')));
+        });
+        bound = true;
+        break;
+      } catch {}
+    }
+
+    const pid = _readPid();
+    if (bound) {
+      _emit(`✓ Daemon aktif (PID: ${pid || '?'}). Admin Panel: http://localhost:${port}/`);
+      _emit(`  Stop dengan: node src/cli.js daemon stop`);
+      _emit(`  Log file:   ${LOG_PATH}`);
+      setTimeout(() => openInBrowser(`http://localhost:${port}/`), 300);
+    } else {
+      _emit(`⚠ Daemon mungkin tidak start (port ${port} belum respond setelah 8s).`);
+      _emit(`  Cek log: node src/cli.js daemon logs`);
+    }
+    return;
+  }
+
+  if (sub === 'stop') {
+    const pid = _readPid();
+    if (!pid || !_pidAlive(pid)) {
+      _emit('Daemon tidak berjalan.');
+      try { fs.unlinkSync(PID_PATH); } catch {}
+      return;
+    }
+    _emit(`Menghentikan daemon (PID: ${pid})...`);
+    try { process.kill(pid, 'SIGTERM'); } catch {}
+    // Wait up to 5s for graceful shutdown
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      if (!_pidAlive(pid)) break;
+    }
+    if (_pidAlive(pid)) {
+      _emit('Daemon tidak respon SIGTERM, force kill...');
+      try { process.kill(pid, 'SIGKILL'); } catch {}
+    }
+    try { fs.unlinkSync(PID_PATH); } catch {}
+    _emit('✓ Daemon dihentikan.');
+    return;
+  }
+
+  if (sub === 'restart') {
+    await cmdDaemon(['stop']);
+    await new Promise(r => setTimeout(r, 1000));
+    await cmdDaemon(['start']);
+    return;
+  }
+
+  if (sub === 'logs') {
+    const n = parseInt(args[1], 10) || 50;
+    if (!fs.existsSync(LOG_PATH)) { _emit('Belum ada log file.'); return; }
+    const lines = fs.readFileSync(LOG_PATH, 'utf8').split('\n');
+    _emit(`── Daemon log (${n} baris terakhir) ──`);
+    _emit(lines.slice(-n).join('\n'));
+    return;
+  }
+
+  // status (default)
+  const pid = _readPid();
+  if (pid && _pidAlive(pid)) {
+    const cfg = getConfig();
+    const port = cfg.apiPort || 3000;
+    let uptime = '?';
+    try {
+      const st = fs.statSync(PID_PATH);
+      const secs = Math.round((Date.now() - st.mtimeMs) / 1000);
+      const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+      uptime = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    } catch {}
+    _emit(`✓ Daemon aktif`);
+    _emit(`  PID:    ${pid}`);
+    _emit(`  Uptime: ${uptime}`);
+    _emit(`  Port:   ${port}`);
+    _emit(`  Admin:  http://localhost:${port}/`);
+    _emit(`  Log:    ${LOG_PATH}`);
+  } else {
+    _emit('Daemon tidak berjalan.');
+    _emit('Start dengan: node src/cli.js daemon start');
+  }
+}
+
 async function cmdAdmin() {
   const { getApiStatus } = require('./api');
   const st = getApiStatus();
@@ -2106,6 +2252,12 @@ async function cmdSkill(args) {
 //  Main
 // ══════════════════════════════════════════════════════════════
 async function main() {
+  // ── Non-interactive entry: `node src/cli.js daemon ...` ─
+  if (_NONINTERACTIVE) {
+    await cmdDaemon(process.argv.slice(3));
+    process.exit(0);
+  }
+
   // Init TUI first (banner printed inside)
   ui.init();
 
@@ -2312,6 +2464,10 @@ async function main() {
       }
       else if (line === '/admin' || line === '/web') {
         await cmdAdmin();
+      }
+      else if (line === '/daemon' || line.startsWith('/daemon ')) {
+        const parts = line.slice(7).trim().split(/\s+/).filter(Boolean);
+        await cmdDaemon(parts);
       }
       else if (line === '/tg' || line.startsWith('/tg ')) {
         const parts = line.slice(3).trim().split(/\s+/).filter(Boolean);
