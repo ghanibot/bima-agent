@@ -24,7 +24,7 @@ function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_PATH)) return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   } catch {}
-  return { lang: 'id', slow: false };
+  return { lang: 'id', slow: false, provider: 'google' };
 }
 
 function _save(cfg) {
@@ -139,10 +139,90 @@ async function mp3ToOgg(mp3Buffer) {
   }
 }
 
+// ── Supertonic provider (ONNX, on-device, multilingual incl. Indonesian) ──
+// Install: clone https://github.com/supertone-inc/supertonic into ~/.bima/supertonic
+//          cd nodejs && npm install
+// We shell out to the local example_onnx.js to avoid bundling its heavy deps
+// inside Bima. Outputs WAV → we convert to OGG Opus via ffmpeg.
+async function synthesizeSupertonic(text) {
+  const supertonicDir = path.join(
+    process.env.BIMA_DATA || path.join(os.homedir(), '.bima'),
+    'supertonic', 'nodejs'
+  );
+  const entry = path.join(supertonicDir, 'example_onnx.js');
+
+  if (!fs.existsSync(entry)) {
+    throw new Error(
+      'Supertonic belum terinstall. Setup:\n' +
+      '  1) cd ' + path.dirname(supertonicDir) + '\n' +
+      '  2) git clone https://github.com/supertone-inc/supertonic .\n' +
+      '  3) cd nodejs && npm install\n' +
+      'Atau pindah ke provider lain di tts.json (provider: "google").'
+    );
+  }
+
+  const lang = _cfg.lang || 'id';
+  const voice = _cfg.voiceStyle || 'M1'; // default voice style
+  const tmpDir = os.tmpdir();
+  const wavPath = path.join(tmpDir, `bima_st_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`);
+
+  await new Promise((resolve, reject) => {
+    execFile('node', [entry,
+      '--text', text,
+      '--lang', lang,
+      '--voice-style', voice,
+      '--output', wavPath,
+    ], { cwd: supertonicDir, timeout: 60000 }, (err, _stdout, stderr) => {
+      if (err) reject(new Error('Supertonic: ' + (stderr?.slice(-200) || err.message)));
+      else resolve();
+    });
+  });
+
+  if (!fs.existsSync(wavPath)) throw new Error('Supertonic tidak menghasilkan output WAV');
+  const wav = fs.readFileSync(wavPath);
+  try { fs.unlinkSync(wavPath); } catch {}
+  return wav;
+}
+
+// Convert WAV → OGG Opus (voice note format)
+async function wavToOgg(wavBuffer) {
+  const id      = `bima_st_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const tmpDir  = os.tmpdir();
+  const wavPath = path.join(tmpDir, `${id}.wav`);
+  const oggPath = path.join(tmpDir, `${id}.ogg`);
+  try {
+    fs.writeFileSync(wavPath, wavBuffer);
+    const ffmpegPath = _getFfmpegPath();
+    await new Promise((resolve, reject) => {
+      execFile(ffmpegPath, ['-i', wavPath, '-c:a', 'libopus', '-b:a', '24k', '-ar', '24000', '-ac', '1', '-y', oggPath],
+        (err, _stdout, stderr) => err ? reject(new Error(`ffmpeg: ${stderr?.slice(-200) || err.message}`)) : resolve());
+    });
+    return fs.readFileSync(oggPath);
+  } finally {
+    try { fs.unlinkSync(wavPath); } catch {}
+    try { fs.unlinkSync(oggPath); } catch {}
+  }
+}
+
+// Switch provider (google | supertonic)
+function setProvider(name) {
+  const p = String(name || '').toLowerCase();
+  if (!['google', 'supertonic'].includes(p)) return 'Pilihan: google | supertonic';
+  _cfg.provider = p;
+  _save(_cfg);
+  return p === 'google' ? 'Google Translate TTS (online, gratis)' : 'Supertonic ONNX (on-device, multilingual)';
+}
+
 // Main: text → OGG buffer ready to send as WhatsApp voice note
 async function textToVoiceNote(text) {
+  const provider = _cfg.provider || 'google';
+  if (provider === 'supertonic') {
+    const wav = await synthesizeSupertonic(text);
+    return await wavToOgg(wav);
+  }
+  // Default: Google
   const mp3 = await synthesizeMp3(text);
   return await mp3ToOgg(mp3);
 }
 
-module.exports = { textToVoiceNote, setVoice, getConfig, VOICE_LIST };
+module.exports = { textToVoiceNote, setVoice, setProvider, getConfig, VOICE_LIST };
