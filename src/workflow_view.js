@@ -20,6 +20,8 @@ const NODE_STYLE = {
   'wa.send':        { icon: '📨', color: C.green },
   'wa.send_to':     { icon: '📩', color: C.green },
   'wa.send_media':  { icon: '🖼 ', color: C.green },
+  'wa.send_sticker':{ icon: '🎭', color: C.green },
+  'wa.send_poll':   { icon: '📊', color: C.green },
   'wa.read_group':  { icon: '📖', color: C.cyan },
   'wa.transcribe':  { icon: '🎙 ', color: C.magenta },
   'wa.vision':      { icon: '👁 ', color: C.magenta },
@@ -78,6 +80,8 @@ function configSummary(node) {
     case 'wa.transcribe': return `source: ${cfg.source || 'trigger'}`;
     case 'wa.vision':     return `source: ${cfg.source || 'trigger'}${cfg.question ? ` Q:"${clip(cfg.question, 25)}"` : ''}`;
     case 'wa.send_media': return `${cfg.type || '?'} ${clip(cfg.source, 30)}${cfg.caption ? ` cap:"${clip(cfg.caption, 20)}"` : ''}`;
+    case 'wa.send_sticker': return `${clip(cfg.source, 35)}${cfg.jid ? ` → ${cfg.jid.split('@')[0]}` : ''}`;
+    case 'wa.send_poll':  return `"${clip(cfg.question, 25)}" [${(cfg.options||[]).length} opsi]${cfg.selectableCount && cfg.selectableCount > 1 ? ` multi×${cfg.selectableCount}` : ''}`;
     case 'file.create':   return `${cfg.name || '?'}${cfg.title ? ` "${clip(cfg.title, 20)}"` : ''}`;
     case 'file.edit':     return `${cfg.name || '?'} (backup .bak)`;
     default: return '';

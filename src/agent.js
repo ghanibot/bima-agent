@@ -46,7 +46,9 @@ TOOLS TERSEDIA:
 21. edit_office(command)          - Manipulasi file Excel/Word/PowerPoint via CLI (Linux/Mac saja)
 22. create_file(input)            - BUAT file baru (pdf/docx/xlsx/txt) dari konten teks. Input: JSON {"name":"namafile.pdf","content":"isi teks","title":"opsional"}
 23. edit_file(input)              - UBAH isi file yang sudah ada (otomatis backup .bak). Input: JSON {"name":"namafile.pdf","content":"isi baru","title":"opsional"}
-24. final_answer(text)            - Kirim jawaban akhir ke pengguna
+24. fill_template(input)          - ISI template docx/xlsx yang punya placeholder {{nama}}, {{umur}}, dst. Input: JSON {"template":"surat_template.docx","data":{"nama":"Rahmat","umur":12},"outputName":"opsional"}
+25. send_sticker(input)           - Kirim sticker (webp) ke chat WhatsApp. Input: JSON {"jid":"628xxx@s.whatsapp.net","source":"URL atau path file .webp"}. WAJIB file webp.
+26. final_answer(text)            - Kirim jawaban akhir ke pengguna
 
 FORMAT RESPONS - balas HANYA JSON valid, tidak ada teks lain:
 {"thought":"pikirku singkat","action":"nama_tool","input":"parameter"}
@@ -78,10 +80,16 @@ ATURAN TOOL — PRIORITAS WAJIB:
 12. User minta UBAH/EDIT/REVISI file yang sudah ada → edit_file (otomatis backup)
     Contoh: "ubah file X jadi Y", "update isi file Z", "revisi nominal di file W"
     Wajib: list_files() DULU untuk pastikan file ada; pakai nama persis dari hasil itu.
-13. ANTI-HALUSINASI: JANGAN karang isi file. Jika user bilang "buatkan pdf nama Rahmat
+13. User punya FILE TEMPLATE (docx/xlsx) berisi placeholder {{nama}}, {{umur}}, dll
+    dan minta diisi dengan data tertentu → fill_template (BUKAN create_file/edit_file).
+    Contoh: "isi template surat.docx dengan nama Rahmat umur 12",
+            "pakai template_invoice.xlsx, customer Budi, jumlah 50000".
+    Template asli tidak diubah — hasil disimpan dengan nama baru otomatis.
+    Wajib: list_files() DULU untuk pastikan template ada; pakai nama persis.
+14. ANTI-HALUSINASI: JANGAN karang isi file. Jika user bilang "buatkan pdf nama Rahmat
     uang jajan 7rb", pakai data yang user kasih PERSIS. Tidak boleh tambah angka/nama
     yang tidak diinformasikan user. Kalau data kurang, TANYA dulu sebelum buat file.
-14. ANTI-OVERWRITE: Tool create_file otomatis auto-rename kalau nama sudah dipakai
+15. ANTI-OVERWRITE: Tool create_file otomatis auto-rename kalau nama sudah dipakai
     (mis. catatan.pdf → catatan_1.pdf). Untuk update file yang sudah ada, WAJIB pakai
     edit_file (bukan create_file dengan nama sama).
 
@@ -94,7 +102,7 @@ ATURAN JAWABAN:
 }
 
 // Search-type tools — trigger "sedang mencari" indicator
-const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket', 'get_my_mentions', 'get_conversation_patterns', 'lookup_contact', 'list_contacts', 'edit_office', 'create_file', 'edit_file']);
+const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket', 'get_my_mentions', 'get_conversation_patterns', 'lookup_contact', 'list_contacts', 'edit_office', 'create_file', 'edit_file', 'fill_template', 'send_sticker']);
 
 // ── Main agent loop ───────────────────────────────────────────
 // onToolCall(action, input) — optional async callback before each tool executes
@@ -542,6 +550,83 @@ async function executeTool(action, input, tools, tenantId) {
         return `✓ File *${targetName}* berhasil diupdate. Backup tersimpan: ${path.basename(result.backup)}`;
       } catch (e) {
         return `Gagal edit file: ${e.message}`;
+      }
+    }
+
+    case 'fill_template': {
+      const { fillTemplate, findFile, listFiles } = require('./filemaker');
+      const { tenantPaths }                       = require('./tenant');
+      const filesDir = tenantPaths(tid).files;
+
+      let opts;
+      try {
+        opts = typeof input === 'string' ? JSON.parse(input) : input;
+      } catch {
+        return 'Error: input harus JSON. Contoh: {"template":"surat.docx","data":{"nama":"Rahmat","umur":12}}';
+      }
+      if (!opts || !opts.template) return 'Error: field "template" wajib (nama file template di KB).';
+      if (!opts.data || typeof opts.data !== 'object') {
+        return 'Error: field "data" wajib (object mapping placeholder→nilai, mis. {"nama":"Rahmat"}).';
+      }
+
+      // Resolve template — exact match first, then fuzzy
+      const fs   = require('fs');
+      const path = require('path');
+      let templateName = opts.template;
+      if (!fs.existsSync(path.join(filesDir, templateName))) {
+        const found = findFile(opts.template, filesDir);
+        if (!found) {
+          const available = listFiles(filesDir).map(f => f.name).slice(0, 10).join(', ');
+          return `Template "${opts.template}" tidak ditemukan. File tersedia: ${available || '(kosong)'}`;
+        }
+        templateName = found.name;
+      }
+
+      try {
+        const result = await fillTemplate(templateName, opts.data, filesDir, {
+          outputName: opts.outputName,
+          overwrite:  opts.overwrite === true,
+        });
+        return `✓ Template *${templateName}* berhasil diisi. Hasil disimpan sebagai *${result.outputName}* di knowledge base.`;
+      } catch (e) {
+        return `Gagal isi template: ${e.message}`;
+      }
+    }
+
+    case 'send_sticker': {
+      const { getSystemSendMediaFn, _fetchMediaSource } = require('./workflow');
+      const sendMediaFn = getSystemSendMediaFn();
+      if (!sendMediaFn) {
+        return 'Error: WhatsApp belum terhubung — sticker tidak bisa dikirim sekarang.';
+      }
+
+      let opts;
+      try {
+        opts = typeof input === 'string' ? JSON.parse(input) : input;
+      } catch {
+        return 'Error: input harus JSON. Contoh: {"jid":"628xxx@s.whatsapp.net","source":"https://.../sticker.webp"}';
+      }
+      if (!opts || !opts.jid)    return 'Error: field "jid" wajib (mis. "628xxx@s.whatsapp.net").';
+      if (!opts.source)          return 'Error: field "source" wajib (URL atau path file .webp).';
+
+      const source = String(opts.source);
+      const isWebpExt = /\.webp(\?|#|$)/i.test(source);
+      const buffer = await _fetchMediaSource(source);
+      if (!buffer) return `Gagal ambil sticker dari "${source}".`;
+
+      const isWebpMagic = buffer.length >= 12
+        && buffer.slice(0, 4).toString('ascii') === 'RIFF'
+        && buffer.slice(8, 12).toString('ascii') === 'WEBP';
+
+      if (!isWebpExt && !isWebpMagic) {
+        return 'Sticker WhatsApp harus berupa file webp. Konversi gambar dulu via tool online atau ffmpeg.';
+      }
+
+      try {
+        await sendMediaFn(String(opts.jid), { sticker: buffer });
+        return `✓ Sticker terkirim ke ${String(opts.jid).split('@')[0]}.`;
+      } catch (e) {
+        return `Gagal kirim sticker: ${e.message}`;
       }
     }
 

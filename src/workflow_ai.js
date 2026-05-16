@@ -75,6 +75,21 @@ wa.send_media — kirim gambar/audio/video/dokumen
     mimetype?: string      // document only, default application/octet-stream
   }
 
+wa.send_sticker — kirim sticker (webp) ke chat
+  config: {
+    jid?: string,          // default: chat sumber trigger
+    source: string         // URL atau path file .webp (WAJIB webp)
+  }
+  // Catatan: hanya file .webp yang didukung. Konversi gambar dulu via tool eksternal.
+
+wa.send_poll — kirim poll/voting ke chat
+  config: {
+    jid?: string,          // default: chat sumber trigger
+    question: string,      // pertanyaan poll
+    options: string[],     // 2-12 opsi (string)
+    selectableCount?: number  // 1 (default, single-choice) atau >1 (multi-choice)
+  }
+
 file.create   — BUAT file baru di knowledge base (pdf/docx/xlsx/txt)
   config: {
     name: string,          // contoh: "laporan_harian.pdf" (ekstensi wajib)
@@ -92,6 +107,18 @@ file.edit     — UBAH file existing (auto-backup .bak dgn timestamp)
     sheetName?: string
   }
   // Output: nama file + nama backup yg dibuat
+
+file.fill_template — ISI template docx/xlsx dengan placeholder {{nama}}, {{umur}}, dst.
+  config: {
+    template:    string,        // nama file template di KB (.docx atau .xlsx)
+    data:        object|string, // mapping {placeholder: nilai}, atau JSON string
+                                // nilai string boleh pakai template var ({{message}}, dll)
+    outputName?: string,        // default: "{stem}_filled_{timestamp}.{ext}"
+    overwrite?:  boolean        // default false
+  }
+  // Template asli tidak diubah — hasil disimpan sebagai file baru.
+  // .docx pakai docxtemplater (delimiter {{ }}).
+  // .xlsx: setiap cell string yang berisi {{key}} di-replace dengan data[key].
 
 transform     — transformasi nilai dengan ekspresi JS, input = lastOutput
   config: { expr: string, inputVar?: string }
@@ -253,7 +280,8 @@ function validateWorkflow(wf) {
     'delay', 'memory.read', 'memory.write', 'set', 'log',
     'loop', 'repeat', 'parallel', 'workflow.run',
     'wa.transcribe', 'wa.vision', 'wa.send_media',
-    'file.create', 'file.edit',
+    'wa.send_sticker', 'wa.send_poll',
+    'file.create', 'file.edit', 'file.fill_template',
   ]);
 
   for (const node of wf.nodes) {

@@ -96,6 +96,7 @@ function cmdHelp() {
     ['/polymarket','Cari pasar prediksi di Polymarket'],
     ['/api',        'REST API + Web Admin panel (start/stop/key/status)'],
     ['/admin',      'Buka Admin Panel di browser (perlu /api start dulu)'],
+    ['/admin-notify','Set nomor WA admin yang akan diberitahu jika workflow gagal berulang'],
     ['/tg',        'Kelola Telegram bot (token/start/stop/status)'],
     ['/tenant',    'Kelola tenant (list/add/switch/del/groups)'],
     ['/skill',     'Kelola plugin/skill (list/add/remove/info)'],
@@ -108,7 +109,7 @@ function cmdHelp() {
 
   let out = 'BIMA — Daftar Perintah\n' + '─'.repeat(40) + '\n';
   cmds.forEach(([cmd, desc]) => {
-    out += `  ${cmd.padEnd(12)} ${desc}\n`;
+    out += `  ${cmd.padEnd(14)} ${desc}\n`;
   });
   out += '─'.repeat(40) + '\nAtau langsung ketik pertanyaan — Bima akan jawab!';
   println(out);
@@ -1829,6 +1830,81 @@ async function cmdAdmin() {
   openInBrowser(url);
 }
 
+// ══════════════════════════════════════════════════════════════
+//  /admin-notify — set WA admin JID for workflow failure alerts
+// ══════════════════════════════════════════════════════════════
+function cmdAdminNotify(args) {
+  const cfg = getConfig(_currentTenant) || {};
+  const sub = (args[0] || '').toLowerCase();
+
+  // No arg or "status" → show current state
+  if (!sub || sub === 'status') {
+    const jid       = cfg.adminJid || '(belum diset)';
+    const threshold = parseInt(cfg.adminNotifyThreshold, 10) || 3;
+    let cooldownInfo = '(belum ada)';
+    try {
+      const { _adminNotifyCooldown } = require('./workflow');
+      const now = Date.now();
+      const entries = [];
+      for (const [k, ts] of _adminNotifyCooldown.entries()) {
+        if (k.startsWith(_currentTenant + '::')) {
+          const mins = Math.max(0, Math.ceil((3600000 - (now - ts)) / 60000));
+          entries.push(`${k.split('::')[1]} → ${mins} menit lagi`);
+        }
+      }
+      if (entries.length) cooldownInfo = entries.join('; ');
+    } catch {}
+
+    let out = 'ADMIN NOTIFY — Status\n' + '─'.repeat(40) + '\n';
+    out += `  Admin JID    ${jid}\n`;
+    out += `  Threshold    ${threshold}x kegagalan berturut-turut\n`;
+    out += `  Cooldown     1 jam per workflow\n`;
+    out += `  Aktif sekarang: ${cooldownInfo}\n`;
+    out += '─'.repeat(40) + '\n';
+    out += 'Set: /admin-notify <nomor|jid>\n';
+    out += 'Off: /admin-notify off';
+    println(out);
+    return;
+  }
+
+  // Disable
+  if (sub === 'off' || sub === 'clear' || sub === 'disable') {
+    saveConfig({ adminJid: null }, _currentTenant);
+    println('Notifikasi admin dimatikan (adminJid dihapus).');
+    return;
+  }
+
+  // Set — accept either JID with @ suffix or a phone number
+  let raw = args[0].trim();
+  // Strip leading + if present, keep digits and @suffix
+  if (raw.startsWith('+')) raw = raw.slice(1);
+
+  let jid;
+  if (raw.includes('@')) {
+    // Validate basic JID shape
+    if (!/@(s\.whatsapp\.net|g\.us|c\.us)$/i.test(raw)) {
+      println('✗ Format JID tidak valid. Gunakan <nomor>@s.whatsapp.net atau ketik nomor telepon saja.');
+      return;
+    }
+    jid = raw;
+  } else {
+    // Phone number only — strip non-digits, append suffix
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length < 8) {
+      println('✗ Nomor terlalu pendek. Contoh: /admin-notify 6281234567890');
+      return;
+    }
+    jid = `${digits}@s.whatsapp.net`;
+  }
+
+  saveConfig({ adminJid: jid }, _currentTenant);
+  const threshold = parseInt(cfg.adminNotifyThreshold, 10) || 3;
+  println(
+    `✓ Admin JID disimpan: ${jid}\n` +
+    `  Akan diberitahu jika workflow gagal ${threshold}x berturut-turut (cooldown 1 jam).`
+  );
+}
+
 async function cmdApi(args) {
   const { startApi, stopApi, getApiStatus } = require('./api');
   const sub = args[0];
@@ -2227,6 +2303,12 @@ async function main() {
       else if (line === '/api' || line.startsWith('/api ')) {
         const parts = line.slice(4).trim().split(/\s+/).filter(Boolean);
         await cmdApi(parts);
+      }
+      else if (line === '/admin-notify' || line.startsWith('/admin-notify ') ||
+               line === '/notify' || line.startsWith('/notify ')) {
+        const cut   = line.startsWith('/admin-notify') ? 13 : 7;
+        const parts = line.slice(cut).trim().split(/\s+/).filter(Boolean);
+        cmdAdminNotify(parts);
       }
       else if (line === '/admin' || line === '/web') {
         await cmdAdmin();

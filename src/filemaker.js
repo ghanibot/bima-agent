@@ -187,6 +187,100 @@ async function editFile(filename, newContent, filesDir, opts = {}) {
   return { path: target, backup: backupPath };
 }
 
+// ── Template fill (docx via docxtemplater, xlsx via cell regex) ──
+// Fills `{{placeholder}}` markers in an existing template file with values from `data`.
+// Produces a NEW file in filesDir (template stays intact).
+//   templateName: basename of file inside filesDir (e.g. "surat_template.docx")
+//   data:         object mapping placeholder name → value
+//   opts:         { outputName?, overwrite? }
+// Returns: { path, outputName }
+async function fillTemplate(templateName, data, filesDir, opts = {}) {
+  if (!templateName) throw new Error('Nama template kosong');
+  if (!data || typeof data !== 'object') throw new Error('data harus object placeholder→nilai');
+
+  // Anti-traversal — only basename allowed
+  const safeTpl = safeName(templateName);
+  const tplPath = path.join(filesDir, safeTpl);
+  if (!fs.existsSync(tplPath)) {
+    throw new Error(`File template "${templateName}" tidak ditemukan`);
+  }
+
+  const ext = path.extname(safeTpl).toLowerCase();
+  if (ext !== '.docx' && ext !== '.xlsx') {
+    throw new Error('Template fill mendukung .docx dan .xlsx saja');
+  }
+
+  // Build output name
+  const stem = safeTpl.slice(0, safeTpl.length - ext.length);
+  const ts   = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const defaultOut = `${stem}_filled_${ts}${ext}`;
+  const outName = safeName(opts.outputName || defaultOut);
+  // Ensure correct extension on user-supplied outputName
+  const outExt = path.extname(outName).toLowerCase();
+  const finalOutName = outExt === ext ? outName : `${outName}${ext}`;
+
+  const outPath = resolveTarget(finalOutName, filesDir, {
+    overwrite: opts.overwrite === true,
+  });
+
+  // Normalize values to strings (docxtemplater needs strings/primitives)
+  const flatData = {};
+  for (const [k, v] of Object.entries(data)) {
+    flatData[k] = v === null || v === undefined ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+  }
+
+  if (ext === '.docx') {
+    const PizZip       = require('pizzip');
+    const Docxtemplater = require('docxtemplater');
+
+    const content = fs.readFileSync(tplPath, 'binary');
+    const zip = new PizZip(content);
+    const doc = new Docxtemplater(zip, {
+      paragraphLoop: true,
+      linebreaks:    true,
+      delimiters:    { start: '{{', end: '}}' },
+    });
+
+    try {
+      doc.render(flatData);
+    } catch (e) {
+      // docxtemplater multi-error: include first explanation
+      const msg = e.properties?.errors?.[0]?.properties?.explanation || e.message;
+      throw new Error(`Gagal isi template docx: ${msg}`);
+    }
+
+    const buf = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(outPath, buf);
+  } else {
+    // xlsx — read every sheet, regex-replace {{key}} in string cells
+    const XLSX = require('xlsx');
+    const wb = XLSX.readFile(tplPath);
+    const re = /\{\{(\w+)\}\}/g;
+
+    for (const sheetName of wb.SheetNames) {
+      const ws = wb.Sheets[sheetName];
+      if (!ws) continue;
+      for (const addr of Object.keys(ws)) {
+        if (addr.startsWith('!')) continue; // metadata key
+        const cell = ws[addr];
+        if (!cell || typeof cell.v !== 'string') continue;
+        if (!re.test(cell.v)) { re.lastIndex = 0; continue; }
+        re.lastIndex = 0;
+        const replaced = cell.v.replace(re, (m, key) =>
+          Object.prototype.hasOwnProperty.call(flatData, key) ? flatData[key] : m
+        );
+        cell.v = replaced;
+        cell.t = 's';
+        if (cell.w !== undefined) delete cell.w; // clear cached formatted text
+      }
+    }
+
+    XLSX.writeFile(wb, outPath);
+  }
+
+  return { path: outPath, outputName: path.basename(outPath) };
+}
+
 // ── List files in tenant files dir ────────────────────────────
 function listFiles(filesDir) {
   if (!fs.existsSync(filesDir)) return [];
@@ -214,6 +308,7 @@ module.exports = {
   createXLSX,
   createText,
   editFile,
+  fillTemplate,
   listFiles,
   findFile,
   safeName,

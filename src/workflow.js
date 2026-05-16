@@ -71,10 +71,13 @@ const _DEFAULT_TIMEOUT_MS = {
   'wa.send':       15000,
   'wa.send_to':    15000,
   'wa.send_media': 60000,  // media upload can be slow
+  'wa.send_sticker': 60000, // sticker upload can be slow
+  'wa.send_poll':    15000,
   'wa.transcribe': 120000, // STT can be slow on long audio
   'wa.vision':     90000,  // vision AI
   'file.create':   30000,
   'file.edit':     30000,
+  'file.fill_template': 60000,
   'loop':          300000,
   'repeat':        300000,
   'parallel':      180000,
@@ -472,6 +475,62 @@ const NODE_EXECUTORS = {
     }
   },
 
+  // file.fill_template — isi template docx/xlsx yang punya placeholder {{key}}
+  // config: { template, data, outputName? }
+  //   template:   nama file template di KB (.docx atau .xlsx)
+  //   data:       object {nama: val, ...} ATAU JSON string yang akan di-parse.
+  //               Nilai string di data didukung template var ({{message}}, dll).
+  //   outputName: opsional, default `{stem}_filled_{ts}.{ext}`
+  // Output: nama file hasil
+  'file.fill_template': async (node, ctx) => {
+    const { fillTemplate, findFile } = require('./filemaker');
+    const { tenantPaths }            = require('./tenant');
+    const filesDir = tenantPaths(ctx._tenantId || 'default').files;
+
+    const template = resolveVars(node.config?.template || '', ctx);
+    if (!template) return { ok: false, error: 'config.template kosong' };
+
+    // data can be object or JSON string
+    let rawData = node.config?.data;
+    if (typeof rawData === 'string') {
+      const resolved = resolveVars(rawData, ctx);
+      try { rawData = JSON.parse(resolved); }
+      catch { return { ok: false, error: 'config.data bukan JSON valid' }; }
+    }
+    if (!rawData || typeof rawData !== 'object') {
+      return { ok: false, error: 'config.data harus object placeholder→nilai (atau JSON string)' };
+    }
+
+    // Resolve template vars in each value
+    const data = {};
+    for (const [k, v] of Object.entries(rawData)) {
+      data[k] = typeof v === 'string' ? resolveVars(v, ctx) : v;
+    }
+
+    const outputName = node.config?.outputName
+      ? resolveVars(node.config.outputName, ctx)
+      : undefined;
+
+    // Resolve exact or fuzzy match for the template
+    const fs   = require('fs');
+    let templateName = template;
+    if (!fs.existsSync(path.join(filesDir, templateName))) {
+      const found = findFile(template, filesDir);
+      if (!found) return { ok: false, error: `Template "${template}" tidak ditemukan di knowledge base` };
+      templateName = found.name;
+    }
+
+    try {
+      const result = await fillTemplate(templateName, data, filesDir, {
+        outputName,
+        overwrite: node.config?.overwrite === true,
+      });
+      return { ok: true, output: result.outputName };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  },
+
   // ── WA media nodes ───────────────────────────────────────
   // wa.transcribe — voice note buffer → text (Whisper/HF STT)
   // source:
@@ -549,6 +608,75 @@ const NODE_EXECUTORS = {
 
     await ctx._sendMediaFn(jid, mediaObj);
     return { ok: true, output: `${type} terkirim ke ${jid.split('@')[0]}` };
+  },
+
+  // wa.send_sticker — kirim sticker (webp) ke JID
+  // config:
+  //   jid?    — default ctx._jid
+  //   source  — URL atau path file webp (required)
+  'wa.send_sticker': async (node, ctx) => {
+    if (!ctx._sendMediaFn) return { ok: false, error: 'no _sendMediaFn in context (run from WA trigger only)' };
+
+    const jid    = resolveVars(node.config?.jid || ctx._jid || '', ctx);
+    const source = resolveVars(node.config?.source || '', ctx);
+
+    if (!jid)    return { ok: false, error: 'jid kosong' };
+    if (!source) return { ok: false, error: 'source kosong (URL atau path webp)' };
+
+    // Best-effort webp validation: extension check or magic-byte check on buffer
+    const isWebpExt = /\.webp(\?|#|$)/i.test(source);
+    const buffer = await _fetchMediaSource(source);
+    if (!buffer) return { ok: false, error: `gagal ambil sticker dari "${source}"` };
+
+    // RIFF....WEBP magic bytes: bytes 0-3 "RIFF", 8-11 "WEBP"
+    const isWebpMagic = buffer.length >= 12
+      && buffer.slice(0, 4).toString('ascii') === 'RIFF'
+      && buffer.slice(8, 12).toString('ascii') === 'WEBP';
+
+    if (!isWebpExt && !isWebpMagic) {
+      return { ok: false, error: 'Sticker WhatsApp harus berupa file webp. Konversi gambar dulu via tool online atau ffmpeg.' };
+    }
+
+    await ctx._sendMediaFn(jid, { sticker: buffer });
+    return { ok: true, output: `sticker terkirim ke ${jid.split('@')[0]}` };
+  },
+
+  // wa.send_poll — kirim poll ke JID
+  // config:
+  //   jid?              — default ctx._jid
+  //   question          — pertanyaan poll (required)
+  //   options           — array string 2-12 opsi (required)
+  //   selectableCount?  — 1 (default, single-choice) atau >1 (multi-choice)
+  'wa.send_poll': async (node, ctx) => {
+    if (!ctx._sendMediaFn) return { ok: false, error: 'no _sendMediaFn in context (run from WA trigger only)' };
+
+    const jid      = resolveVars(node.config?.jid || ctx._jid || '', ctx);
+    const question = resolveVars(node.config?.question || '', ctx);
+    const rawOpts  = node.config?.options;
+    const selectableCount = parseInt(node.config?.selectableCount, 10) || 1;
+
+    if (!jid)      return { ok: false, error: 'jid kosong' };
+    if (!question) return { ok: false, error: 'question kosong' };
+    if (!Array.isArray(rawOpts)) return { ok: false, error: 'options harus array' };
+
+    const options = rawOpts
+      .map(o => resolveVars(String(o ?? ''), ctx))
+      .filter(o => o.length > 0);
+
+    if (options.length < 2)  return { ok: false, error: 'options minimal 2' };
+    if (options.length > 12) return { ok: false, error: 'options maksimal 12' };
+    if (selectableCount < 1 || selectableCount > options.length) {
+      return { ok: false, error: `selectableCount harus 1..${options.length}` };
+    }
+
+    await ctx._sendMediaFn(jid, {
+      poll: {
+        name:            question,
+        values:          options,
+        selectableCount: selectableCount,
+      },
+    });
+    return { ok: true, output: `poll terkirim ke ${jid.split('@')[0]} (${options.length} opsi)` };
   },
 
   // json.extract — extract field from JSON string in lastOutput
@@ -745,6 +873,10 @@ function setSystemSenders({ sendFn, sendMediaFn } = {}) {
   if (sendMediaFn !== undefined) _systemSendMediaFn = sendMediaFn;
 }
 
+// Accessor for modules that need to send WA media outside the workflow runtime
+// (e.g. agent.js send_sticker tool). Returns null if WA isn't connected.
+function getSystemSendMediaFn() { return _systemSendMediaFn; }
+
 // ── DAG runner ────────────────────────────────────────────────
 async function runWorkflow(wf, context, logFn) {
   const ctx = { ...context, _logFn: logFn, _wf: wf }; // _wf for loop/parallel/sub-workflow
@@ -866,7 +998,83 @@ async function runWorkflow(wf, context, logFn) {
   // Persist run history (async, non-blocking)
   _saveRunHistory(tenantId, run).catch(() => {});
 
+  // Admin notification on repeated failure (fire-and-forget; must never break the run).
+  if (!isTest) {
+    try {
+      _checkAndNotifyAdmin(tenantId, wf.id, run, wf.name).catch(() => {});
+    } catch {}
+  }
+
   return run;
+}
+
+// ── Admin notification on repeated workflow failure ───────────
+// Cooldown map: key = `${tenantId}::${wfId}`, value = timestamp of last notify.
+const _adminNotifyCooldown = new Map();
+const _ADMIN_NOTIFY_COOLDOWN_MS = 3600000; // 1 hour
+
+async function _checkAndNotifyAdmin(tenantId, wfId, run, wfName) {
+  try {
+    const key = `${tenantId}::${wfId}`;
+
+    // Success → reset the cooldown so we can notify again on future streaks.
+    if (run && run.ok === true) {
+      _adminNotifyCooldown.delete(key);
+      return;
+    }
+    if (!run || run.ok !== false) return;
+
+    // Lazy-require config to avoid any circular-load risk.
+    let cfg = {};
+    try { cfg = require('./config').getConfig(tenantId) || {}; } catch {}
+
+    const adminJid = cfg.adminJid;
+    if (!adminJid) return;                // no admin configured → skip
+    if (!_systemSendFn) return;           // WA not connected → skip
+
+    const threshold = Math.max(1, parseInt(cfg.adminNotifyThreshold, 10) || 3);
+
+    // Pull recent history (already includes the just-saved run).
+    const recent = getRunHistory(tenantId, wfId, Math.max(threshold, 5));
+    if (recent.length < threshold) return;
+    const lastN = recent.slice(0, threshold); // newest-first
+    const allFailed = lastN.every(r => r && r.ok === false);
+    if (!allFailed) return;
+
+    // Cooldown check.
+    const now = Date.now();
+    const lastNotified = _adminNotifyCooldown.get(key) || 0;
+    if (now - lastNotified < _ADMIN_NOTIFY_COOLDOWN_MS) return;
+
+    // Format timestamp in WIB (UTC+7).
+    const wibDate = new Date(now + 7 * 3600000);
+    const pad = n => String(n).padStart(2, '0');
+    const timestampWIB =
+      `${wibDate.getUTCFullYear()}-${pad(wibDate.getUTCMonth() + 1)}-${pad(wibDate.getUTCDate())} ` +
+      `${pad(wibDate.getUTCHours())}:${pad(wibDate.getUTCMinutes())} WIB`;
+
+    const lastError = (run.error || lastN[0]?.error || '(tidak diketahui)').toString().slice(0, 300);
+    const trigger   = run.trigger || lastN[0]?.trigger || 'unknown';
+    const name      = wfName || wfId;
+
+    const text =
+      `⚠ *Workflow Gagal Berulang*\n\n` +
+      `Workflow *${name}* (id: \`${wfId}\`) gagal ${threshold}x berturut-turut.\n\n` +
+      `Error terakhir: _${lastError}_\n` +
+      `Trigger: ${trigger}\n` +
+      `Waktu: ${timestampWIB}\n\n` +
+      `Cek log: /workflow history ${wfId}`;
+
+    _adminNotifyCooldown.set(key, now);
+    try {
+      await _systemSendFn(adminJid, text);
+    } catch {
+      // Send failed — clear the cooldown so a future run can retry the notify.
+      _adminNotifyCooldown.delete(key);
+    }
+  } catch {
+    // Never throw out of this helper.
+  }
 }
 
 // ── Run history ───────────────────────────────────────────────
@@ -1339,4 +1547,10 @@ module.exports = {
   // WA message
   handleWATrigger,
   setSystemSenders,
+  getSystemSendMediaFn,
+  // exposed for agent tools (e.g. send_sticker)
+  _fetchMediaSource,
+  // admin notification (exported for testing)
+  _checkAndNotifyAdmin,
+  _adminNotifyCooldown,
 };
