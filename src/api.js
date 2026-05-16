@@ -144,6 +144,44 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:.8rem;color:#94a3b8;bac
 .builder-toolbar{background:#1e293b;border:1px solid #334155;border-radius:6px;padding:8px;margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .builder-toolbar input{width:auto;flex:1;min-width:120px;padding:5px 8px;font-size:.78rem}
 .builder-toolbar .btn{padding:5px 12px;font-size:.78rem;margin:0}
+
+/* ── Welcome / Quick Start ──────────────────────────────── */
+.welcome{background:linear-gradient(135deg,#1e293b 0%,#0f4d2a 100%);border:1px solid #22c55e;border-radius:10px;padding:20px;margin-bottom:16px}
+.welcome h2{color:#22c55e;margin-bottom:12px;font-size:1.1rem;text-transform:none;letter-spacing:0}
+.welcome p{color:#e2e8f0;font-size:.88rem;line-height:1.5;margin-bottom:10px}
+.welcome .qs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px}
+.welcome .qs-card{background:rgba(15,23,42,.6);border:1px solid #334155;border-radius:8px;padding:12px;cursor:pointer;transition:.2s}
+.welcome .qs-card:hover{border-color:#22c55e;background:rgba(15,23,42,.9)}
+.welcome .qs-card .qs-icon{font-size:1.4rem;margin-bottom:6px}
+.welcome .qs-card .qs-title{font-weight:600;color:#22c55e;font-size:.88rem;margin-bottom:4px}
+.welcome .qs-card .qs-desc{color:#94a3b8;font-size:.75rem;line-height:1.4}
+.welcome-close{float:right;color:#94a3b8;background:none;border:none;cursor:pointer;font-size:1rem;padding:0 4px}
+.welcome-close:hover{color:#ef4444}
+
+/* ── Mobile responsive ──────────────────────────────────── */
+@media (max-width: 768px) {
+  header h1{font-size:.95rem}
+  .api-key-bar{flex-wrap:wrap;font-size:.75rem}
+  .api-key-bar input{width:100%}
+  nav{overflow-x:auto;-webkit-overflow-scrolling:touch;flex-wrap:nowrap;white-space:nowrap;padding:0 8px}
+  nav::-webkit-scrollbar{height:3px}
+  nav::-webkit-scrollbar-thumb{background:#334155}
+  nav button{padding:10px 12px;font-size:.78rem;flex-shrink:0}
+  main{padding:12px}
+  .card{padding:12px}
+  .grid-2{grid-template-columns:1fr}
+  .builder-layout{grid-template-columns:1fr;height:auto}
+  .builder-pane{height:auto;min-height:200px;max-height:350px}
+  .builder-toolbar{flex-direction:column;align-items:stretch}
+  .builder-toolbar input,.builder-toolbar select{width:100%}
+  #wf-canvas{min-height:300px}
+  table{font-size:.78rem}
+  th,td{padding:5px 4px}
+}
+
+/* ── Tooltip / help icon ────────────────────────────────── */
+.help-icon{display:inline-block;width:16px;height:16px;border-radius:50%;background:#334155;color:#94a3b8;text-align:center;font-size:.7rem;line-height:16px;cursor:help;margin-left:6px}
+.help-icon:hover{background:#475569;color:#e2e8f0}
 </style>
 </head>
 <body>
@@ -170,6 +208,35 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:.8rem;color:#94a3b8;bac
 
 <!-- STATUS TAB -->
 <div class="tab active" id="tab-status">
+
+  <div class="welcome" id="welcome-card">
+    <button class="welcome-close" onclick="dismissWelcome()" title="Tutup">&#10005;</button>
+    <h2>&#128075; Selamat datang di Bima Admin Panel</h2>
+    <p>Panel ini untuk kelola WhatsApp AI agent kamu. Pilih salah satu di bawah untuk mulai:</p>
+    <div class="qs-grid">
+      <div class="qs-card" onclick="document.querySelector('nav button:nth-child(2)').click()">
+        <div class="qs-icon">&#128172;</div>
+        <div class="qs-title">Kirim Pesan WA</div>
+        <div class="qs-desc">Kirim pesan ke grup atau nomor tertentu dari panel ini.</div>
+      </div>
+      <div class="qs-card" onclick="document.querySelector('nav button:nth-child(5)').click()">
+        <div class="qs-icon">&#9654;</div>
+        <div class="qs-title">Workflow</div>
+        <div class="qs-desc">Lihat workflow otomatis yang aktif. Bisa enable/disable.</div>
+      </div>
+      <div class="qs-card" onclick="document.querySelector('nav button:nth-child(6)').click()">
+        <div class="qs-icon">&#128296;</div>
+        <div class="qs-title">Builder Visual</div>
+        <div class="qs-desc">Drag-drop bikin workflow baru tanpa coding (desktop disarankan).</div>
+      </div>
+      <div class="qs-card" onclick="document.querySelector('nav button:nth-child(3)').click()">
+        <div class="qs-icon">&#128218;</div>
+        <div class="qs-title">Knowledge Base</div>
+        <div class="qs-desc">Dokumen yang dipelajari AI untuk jawab pertanyaan.</div>
+      </div>
+    </div>
+  </div>
+
   <div class="card">
     <h2>Koneksi</h2>
     <div class="grid-2">
@@ -286,6 +353,10 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:.8rem;color:#94a3b8;bac
 
 <!-- BUILDER TAB (Visual Workflow Editor) -->
 <div class="tab" id="tab-builder">
+  <div id="builder-mobile-warn" class="card" style="display:none;background:#451a03;border-color:#b45309">
+    <strong style="color:#fbbf24">&#9888; Layar kecil terdeteksi</strong>
+    <p style="color:#fed7aa;font-size:.85rem;margin-top:6px">Visual Builder butuh drag-drop yang lebih nyaman di desktop/laptop. Bisa tetap dipakai tapi disarankan buka di komputer dengan layar lebar.</p>
+  </div>
   <div class="builder-toolbar">
     <input type="text" id="bld-id" placeholder="Workflow ID (huruf kecil, underscore)">
     <input type="text" id="bld-name" placeholder="Nama workflow">
@@ -329,6 +400,24 @@ pre{white-space:pre-wrap;word-break:break-word;font-size:.8rem;color:#94a3b8;bac
 var API_KEY = localStorage.getItem('bima_api_key') || '';
 if (API_KEY) document.getElementById('api-key-input').value = API_KEY;
 
+// Hide welcome if dismissed previously
+if (localStorage.getItem('bima_welcome_dismissed') === '1') {
+  var w = document.getElementById('welcome-card');
+  if (w) w.style.display = 'none';
+}
+
+function dismissWelcome() {
+  document.getElementById('welcome-card').style.display = 'none';
+  localStorage.setItem('bima_welcome_dismissed', '1');
+}
+
+// Auto-collapse API key bar after first save (or if empty and not needed)
+function toggleApiKeyBar() {
+  var bar = document.querySelector('.api-key-bar');
+  if (!bar) return;
+  bar.style.display = bar.style.display === 'none' ? 'flex' : 'none';
+}
+
 function saveKey() {
   API_KEY = document.getElementById('api-key-input').value.trim();
   localStorage.setItem('bima_api_key', API_KEY);
@@ -345,14 +434,23 @@ function headers() {
 }
 
 function showTab(name, btn) {
-  document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('active'); });
-  document.querySelectorAll('nav button').forEach(function(b){ b.classList.remove('active'); });
-  document.getElementById('tab-' + name).classList.add('active');
-  btn.classList.add('active');
-  if (name === 'kb') loadKB();
-  if (name === 'status') loadGroups();
-  if (name === 'send') loadGroupsForSend();
-  if (name === 'log') loadGroupsForLog();
+  try {
+    document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('active'); });
+    document.querySelectorAll('nav button').forEach(function(b){ b.classList.remove('active'); });
+    var tab = document.getElementById('tab-' + name);
+    if (!tab) { console.error('Tab not found: tab-' + name); return; }
+    tab.classList.add('active');
+    if (btn) btn.classList.add('active');
+    // Scroll tab into view on mobile (nav is horizontal-scroll)
+    if (btn && btn.scrollIntoView) btn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    if (name === 'kb')     loadKB();
+    if (name === 'status') loadGroups();
+    if (name === 'send')   loadGroupsForSend();
+    if (name === 'log')    loadGroupsForLog();
+  } catch(e) {
+    console.error('showTab error:', e);
+    alert('Error ganti tab: ' + e.message);
+  }
 }
 
 function showMsg(id, text, isOk) {
@@ -678,6 +776,11 @@ var NODE_DEFS = {
 function initBuilder() {
   if (BLD.initialized) return;
   BLD.initialized = true;
+  // Show mobile warning if narrow viewport
+  if (window.innerWidth < 768) {
+    var w = document.getElementById('builder-mobile-warn');
+    if (w) w.style.display = 'block';
+  }
   renderPalette();
   refreshBuilderLoadList();
   bindCanvasEvents();

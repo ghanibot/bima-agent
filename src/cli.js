@@ -93,6 +93,7 @@ function cmdHelp() {
     ['/search',    'Cari di web langsung dari terminal'],
     ['/polymarket','Cari pasar prediksi di Polymarket'],
     ['/api',        'REST API + Web Admin panel (start/stop/key/status)'],
+    ['/admin',      'Buka Admin Panel di browser (perlu /api start dulu)'],
     ['/tg',        'Kelola Telegram bot (token/start/stop/status)'],
     ['/tenant',    'Kelola tenant (list/add/switch/del/groups)'],
     ['/skill',     'Kelola plugin/skill (list/add/remove/info)'],
@@ -1789,6 +1790,30 @@ async function cmdTelegram(args) {
 // ══════════════════════════════════════════════════════════════
 //  /api — REST API + Web Admin
 // ══════════════════════════════════════════════════════════════
+// Open URL in default OS browser
+function openInBrowser(url) {
+  const { exec } = require('child_process');
+  const platform = process.platform;
+  const cmd = platform === 'win32' ? `start "" "${url}"`
+            : platform === 'darwin' ? `open "${url}"`
+            : `xdg-open "${url}"`;
+  exec(cmd, (err) => {
+    if (err) println(`(Tidak bisa buka browser otomatis. Buka manual: ${url})`);
+  });
+}
+
+async function cmdAdmin() {
+  const { getApiStatus } = require('./api');
+  const st = getApiStatus();
+  if (!st.running) {
+    println('REST API belum jalan. Ketik /api start dulu.');
+    return;
+  }
+  const url = `http://localhost:${st.port}/`;
+  println(`Membuka ${url} di browser...`);
+  openInBrowser(url);
+}
+
 async function cmdApi(args) {
   const { startApi, stopApi, getApiStatus } = require('./api');
   const sub = args[0];
@@ -1835,11 +1860,43 @@ async function cmdApi(args) {
         tenantId:  () => _currentTenant,
       });
       ui.log('API', `REST API berjalan di port ${port} — Admin: http://localhost:${port}/`);
-      println(`✓ REST API aktif di http://localhost:${port}/\n  Admin Panel: http://localhost:${port}/\n  Kirim pesan via: POST http://localhost:${port}/api/send`);
+
+      // Detect LAN IPs so phone on same WiFi can connect
+      const os = require('os');
+      const nets = os.networkInterfaces();
+      const lanIps = [];
+      for (const name of Object.keys(nets)) {
+        for (const net of nets[name] || []) {
+          if (net.family === 'IPv4' && !net.internal) lanIps.push(net.address);
+        }
+      }
+
+      const banner = [
+        '',
+        '╔══════════════════════════════════════════════════════╗',
+        '║       🌐  BIMA ADMIN PANEL SIAP DIPAKAI              ║',
+        '╠══════════════════════════════════════════════════════╣',
+        `║  💻 Di komputer ini:  http://localhost:${port}`.padEnd(55) + '║',
+        ...lanIps.map(ip => `║  📱 Dari HP/WiFi:     http://${ip}:${port}`.padEnd(55) + '║'),
+        '╠══════════════════════════════════════════════════════╣',
+        '║  Buka URL di atas pakai browser apapun              ║',
+        '║  (Chrome, Edge, Safari, Firefox)                    ║',
+        '║                                                      ║',
+        '║  Ketik /admin untuk buka otomatis                   ║',
+        '╚══════════════════════════════════════════════════════╝',
+        '',
+      ].join('\n');
+      println(banner);
+
       const cfgNow = getConfig(_currentTenant);
       cfgNow.apiPort = port;
       saveConfig(cfgNow, _currentTenant);
       ui.updateStatus({ provider: cfgNow.provider, model: cfgNow.model, tenant: _currentTenant, apiPort: port });
+
+      // Auto-open browser on first start (unless suppressed)
+      if (args[2] !== '--no-open' && !cfgNow.apiNoAutoOpen) {
+        setTimeout(() => openInBrowser(`http://localhost:${port}/`), 800);
+      }
     } catch (e) {
       println(`✗ Gagal start API: ${e.message}`);
     }
@@ -2114,6 +2171,9 @@ async function main() {
       else if (line === '/api' || line.startsWith('/api ')) {
         const parts = line.slice(4).trim().split(/\s+/).filter(Boolean);
         await cmdApi(parts);
+      }
+      else if (line === '/admin' || line === '/web') {
+        await cmdAdmin();
       }
       else if (line === '/tg' || line.startsWith('/tg ')) {
         const parts = line.slice(3).trim().split(/\s+/).filter(Boolean);
