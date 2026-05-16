@@ -19,6 +19,60 @@ let _reconnectAttempts = 0;
 
 const msgStore = new Map();
 
+// ── Pub/sub for QR codes (used by REST API to stream to browser) ──
+const _qrSubscribers = new Set();   // each handler receives qrString | { event, payload }
+let _lastQR     = null;
+let _lastQRTime = 0;
+
+function subscribeQR(handler) {
+  _qrSubscribers.add(handler);
+  // Immediately emit the last QR if we have a fresh one (<60s old)
+  if (_lastQR && (Date.now() - _lastQRTime) < 60000) {
+    try { handler(_lastQR); } catch {}
+  }
+  return () => _qrSubscribers.delete(handler);
+}
+
+function _emitQR(qr) {
+  _lastQR     = qr;
+  _lastQRTime = Date.now();
+  for (const fn of _qrSubscribers) { try { fn(qr); } catch {} }
+}
+
+function _emitConnected() {
+  _lastQR = null;
+  for (const fn of _qrSubscribers) { try { fn({ event: 'connected' }); } catch {} }
+}
+
+function _emitWAError(message) {
+  for (const fn of _qrSubscribers) { try { fn({ event: 'error', payload: message }); } catch {} }
+}
+
+function getCurrentQR() {
+  if (!_lastQR) return null;
+  if ((Date.now() - _lastQRTime) > 60000) return null; // stale
+  return _lastQR;
+}
+
+function getJoinedGroups() {
+  const groups = (state && Array.isArray(state.groups)) ? state.groups : [];
+  return groups.map(g => {
+    const jid = g.id || g.jid || '';
+    return {
+      jid,
+      name: g.subject || g.name || (jid ? jid.split('@')[0] : ''),
+      type: jid.endsWith('@g.us') ? 'group' : 'channel',
+    };
+  });
+}
+
+async function reconnectWA(logger) {
+  // Trigger a fresh connection attempt. If already connected, return immediately.
+  if (state.connected) return { ok: true, already: true };
+  await startWA(logger || (() => {}));
+  return { ok: true, already: false };
+}
+
 // Reply chain: users bima recently replied to per group (5 min TTL)
 const replyChain = new Map();
 const CHAIN_TTL  = 5 * 60 * 1000;
@@ -189,10 +243,12 @@ async function startWA(logger) {
         console.log('\n');
         qrcode.generate(qr, { small: true });
         logFn('WA', 'Scan QR code di atas dengan WhatsApp kamu!');
+        _emitQR(qr);
       }
 
       if (connection === 'open') {
         state.connected = true;
+        _emitConnected();
         _reconnectAttempts = 0;
         const user = sock.user || {};
         const uid  = user.id || '';
@@ -234,10 +290,12 @@ async function startWA(logger) {
 
         if (isLoggedOut) {
           logFn('WA', `Logout (${code}). Ketik /wa untuk scan QR ulang.`);
+          _emitWAError('logged out');
           _reconnectAttempts = 0;
           started = false;
         } else if (isReplaced) {
           logFn('WA', `Sesi digantikan perangkat lain (440). Ketik /wa untuk reconnect manual.`);
+          _emitWAError('session replaced');
           _reconnectAttempts = 0;
           started = false;
         } else {
@@ -1191,4 +1249,17 @@ function sendWAMessage(jid, text) {
   return sock.sendMessage(jid, { text });
 }
 
-module.exports = { startWA, getWAStatus, logoutWA, sendWAMessage };
+module.exports = {
+  startWA,
+  getWAStatus,
+  logoutWA,
+  sendWAMessage,
+  subscribeQR,
+  getCurrentQR,
+  getJoinedGroups,
+  reconnectWA,
+  // Exposed for tests
+  _emitQR,
+  _emitConnected,
+  _emitWAError,
+};
