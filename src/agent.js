@@ -45,7 +45,7 @@ TOOLS TERSEDIA:
 20. delete_contact(name)          - Hapus kontak dari buku kontak
 21. edit_office(command)          - Manipulasi file Excel/Word/PowerPoint via CLI (Linux/Mac saja)
 22. create_file(input)            - BUAT file baru (pdf/docx/xlsx/txt) dari konten teks. Input: JSON {"name":"namafile.pdf","content":"isi teks","title":"opsional"}
-23. edit_file(input)              - UBAH isi file yang sudah ada (otomatis backup .bak). Input: JSON {"name":"namafile.pdf","content":"isi baru","title":"opsional"}
+23. edit_file(input)              - UBAH isi file yang sudah ada (otomatis backup .bak). Input: JSON {"name":"namafile.pdf","content":"isi baru","title":"opsional","mode":"replace|append_page|stamp_header|stamp_footer|append_text"}
 24. fill_template(input)          - ISI template docx/xlsx yang punya placeholder {{nama}}, {{umur}}, dst. Input: JSON {"template":"surat_template.docx","data":{"nama":"Rahmat","umur":12},"outputName":"opsional"}
 25. send_sticker(input)           - Kirim sticker (webp) ke chat WhatsApp. Input: JSON {"jid":"628xxx@s.whatsapp.net","source":"URL atau path file .webp"}. WAJIB file webp.
 26. send_file(input)              - Kirim file (PDF/docx/xlsx/dll) dari KB ke chat WhatsApp sebagai dokumen.
@@ -83,6 +83,13 @@ ATURAN TOOL — PRIORITAS WAJIB:
 12. User minta UBAH/EDIT/REVISI file yang sudah ada → edit_file (otomatis backup)
     Contoh: "ubah file X jadi Y", "update isi file Z", "revisi nominal di file W"
     Wajib: list_files() DULU untuk pastikan file ada; pakai nama persis dari hasil itu.
+    Mode edit_file (khusus PDF — untuk file lain otomatis fallback ke "replace"):
+    - "ubah isi laporan jadi X"         → mode "replace" (default, regenerate ulang)
+    - "tambahkan halaman X di laporan"  → mode "append_page" (tambah halaman baru)
+    - "stempel DRAFT di setiap halaman" → mode "stamp_header" (cap teks di atas tiap halaman)
+    - "tambah footer halaman"           → mode "stamp_footer" (cap teks di bawah tiap halaman)
+    - "tambahkan catatan di akhir"      → mode "append_text" (tambah teks di akhir halaman terakhir)
+    Mode preserve TIDAK regenerate PDF — struktur asli (font, layout, gambar) tetap utuh.
 13. User punya FILE TEMPLATE (docx/xlsx) berisi placeholder {{nama}}, {{umur}}, dll
     dan minta diisi dengan data tertentu → fill_template (BUKAN create_file/edit_file).
     Contoh: "isi template surat.docx dengan nama Rahmat umur 12",
@@ -537,8 +544,8 @@ async function executeTool(action, input, tools, tenantId) {
     }
 
     case 'edit_file': {
-      const { editFile, findFile, listFiles } = require('./filemaker');
-      const { tenantPaths }                   = require('./tenant');
+      const { editFile, editPDFPreserve, findFile, listFiles } = require('./filemaker');
+      const { tenantPaths }                                    = require('./tenant');
       const filesDir = tenantPaths(tid).files;
 
       let opts;
@@ -563,6 +570,39 @@ async function executeTool(action, input, tools, tenantId) {
         targetName = found.name;
       }
 
+      const mode = String(opts.mode || 'replace').toLowerCase();
+      const PRESERVE_MODES = new Set(['append_page', 'stamp_header', 'stamp_footer', 'append_text']);
+      const ext = path.extname(targetName).toLowerCase();
+
+      // Preserve-mode path (only valid for PDF; otherwise fall back to replace + warn)
+      if (PRESERVE_MODES.has(mode)) {
+        if (ext !== '.pdf') {
+          try {
+            const result = await editFile(targetName, opts.content, filesDir, {
+              title:     opts.title,
+              sheetName: opts.sheetName,
+            });
+            return `⚠ Mode "${mode}" hanya untuk PDF — file *${targetName}* di-replace seperti biasa. Backup: ${path.basename(result.backup)}`;
+          } catch (e) {
+            return `Gagal edit file: ${e.message}`;
+          }
+        }
+
+        try {
+          const result = await editPDFPreserve(targetName, opts.content, filesDir, {
+            mode,
+            fontSize: opts.fontSize,
+            color:    opts.color,
+            x:        opts.x,
+            y:        opts.y,
+          });
+          return `✓ PDF *${targetName}* diupdate (mode: ${mode}). Backup: ${path.basename(result.backup)}`;
+        } catch (e) {
+          return `Gagal edit PDF (preserve): ${e.message}`;
+        }
+      }
+
+      // Default: replace (existing behaviour)
       try {
         const result = await editFile(targetName, opts.content, filesDir, {
           title:     opts.title,

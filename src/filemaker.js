@@ -187,6 +187,165 @@ async function editFile(filename, newContent, filesDir, opts = {}) {
   return { path: target, backup: backupPath };
 }
 
+// ── Edit PDF while PRESERVING original structure ──────────────
+// Patches an existing PDF: append page, stamp header/footer, append text on
+// last page. Does NOT regenerate — keeps original pages, layout, fonts, images.
+//
+// mode:
+//   "append_page"   — add a new page with the given text content
+//   "stamp_header"  — draw text near top of EVERY page (e.g. "DRAFT", "PAID")
+//   "stamp_footer"  — draw text near bottom of every page
+//   "append_text"   — append text near bottom of the LAST page only
+//
+// opts:
+//   { mode?, fontSize?, color?, x?, y? }
+//     - color: [r,g,b] each 0..1 (default [0,0,0])
+//     - fontSize: default 11 (or 16 for header/footer stamps if not given)
+//
+// Returns: { path, backup, mode }
+async function editPDFPreserve(filename, text, filesDir, opts = {}) {
+  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+
+  const mode = String(opts.mode || 'append_text').toLowerCase();
+  const safe = safeName(filename);
+  const target = path.join(filesDir, safe);
+  if (!fs.existsSync(target)) {
+    throw new Error(`File "${filename}" tidak ditemukan`);
+  }
+
+  // Reject non-PDF up front — caller should fall back to replace
+  const ext = path.extname(safe).toLowerCase();
+  if (ext !== '.pdf') {
+    throw new Error(`File "${filename}" bukan PDF — mode preserve hanya untuk .pdf`);
+  }
+
+  // Backup
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = `${target}.${ts}.bak`;
+  fs.copyFileSync(target, backupPath);
+
+  // Load original buffer + parse
+  const origBuf = fs.readFileSync(target);
+  const doc     = await PDFDocument.load(origBuf);
+  const font    = await doc.embedFont(StandardFonts.Helvetica);
+
+  const color = Array.isArray(opts.color) && opts.color.length === 3
+    ? rgb(opts.color[0], opts.color[1], opts.color[2])
+    : rgb(0, 0, 0);
+
+  // Wrap long lines naively at ~80 chars (no real text measurement for v1)
+  function wrapLines(input, maxChars = 80) {
+    const out = [];
+    for (const para of String(input || '').split('\n')) {
+      if (para.length <= maxChars) { out.push(para); continue; }
+      // Greedy word wrap
+      let line = '';
+      for (const word of para.split(/(\s+)/)) {
+        if ((line + word).length > maxChars && line.trim()) {
+          out.push(line.trimEnd());
+          line = word.trimStart();
+        } else {
+          line += word;
+        }
+      }
+      if (line) out.push(line.trimEnd());
+    }
+    return out;
+  }
+
+  const textStr = String(text || '');
+
+  if (mode === 'append_page') {
+    const fontSize = Number(opts.fontSize) || 11;
+    // A4 ≈ 595 x 842 pt
+    const page  = doc.addPage();
+    const { width, height } = page.getSize();
+    const margin = 50;
+    const lineHeight = fontSize * 1.4;
+    // Rough char-width capacity
+    const approxCharWidth = fontSize * 0.5;
+    const maxChars = Math.max(20, Math.floor((width - 2 * margin) / approxCharWidth));
+    const lines = wrapLines(textStr, maxChars);
+
+    let y = height - margin;
+    let curPage = page;
+    for (const line of lines) {
+      if (y < margin) {
+        curPage = doc.addPage();
+        y = curPage.getSize().height - margin;
+      }
+      curPage.drawText(line, {
+        x: opts.x ?? margin,
+        y,
+        size: fontSize,
+        font,
+        color,
+      });
+      y -= lineHeight;
+    }
+  } else if (mode === 'stamp_header') {
+    const fontSize = Number(opts.fontSize) || 16;
+    const pages = doc.getPages();
+    for (const p of pages) {
+      const { height } = p.getSize();
+      p.drawText(textStr, {
+        x:    opts.x ?? 50,
+        y:    opts.y ?? (height - 40),
+        size: fontSize,
+        font,
+        color,
+      });
+    }
+  } else if (mode === 'stamp_footer') {
+    const fontSize = Number(opts.fontSize) || 16;
+    const pages = doc.getPages();
+    for (const p of pages) {
+      p.drawText(textStr, {
+        x:    opts.x ?? 50,
+        y:    opts.y ?? 30,
+        size: fontSize,
+        font,
+        color,
+      });
+    }
+  } else if (mode === 'append_text') {
+    const fontSize = Number(opts.fontSize) || 11;
+    const pages = doc.getPages();
+    if (!pages.length) throw new Error('PDF tidak punya halaman');
+    const last = pages[pages.length - 1];
+    const { width } = last.getSize();
+    const margin = 50;
+    const lineHeight = fontSize * 1.4;
+    const approxCharWidth = fontSize * 0.5;
+    const maxChars = Math.max(20, Math.floor((width - 2 * margin) / approxCharWidth));
+    const lines = wrapLines(textStr, maxChars);
+
+    let y = opts.y ?? 50;
+    // Stack upward so multi-line text doesn't run off the page bottom
+    y += lineHeight * Math.max(0, lines.length - 1);
+    for (const line of lines) {
+      last.drawText(line, {
+        x: opts.x ?? margin,
+        y,
+        size: fontSize,
+        font,
+        color,
+      });
+      y -= lineHeight;
+    }
+  } else {
+    throw new Error(`Mode "${mode}" tidak dikenal (pakai: append_page, stamp_header, stamp_footer, append_text)`);
+  }
+
+  // Atomic write: write to .tmp, then rename
+  const outBytes = await doc.save();
+  const tmpPath  = `${target}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, Buffer.from(outBytes));
+  fs.renameSync(tmpPath, target);
+
+  return { path: target, backup: backupPath, mode };
+}
+
 // ── Template fill (docx via docxtemplater, xlsx via cell regex) ──
 // Fills `{{placeholder}}` markers in an existing template file with values from `data`.
 // Produces a NEW file in filesDir (template stays intact).
@@ -384,6 +543,7 @@ module.exports = {
   createXLSX,
   createText,
   editFile,
+  editPDFPreserve,
   fillTemplate,
   listFiles,
   findFile,

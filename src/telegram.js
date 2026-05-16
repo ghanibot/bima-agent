@@ -33,6 +33,32 @@ async function startTelegram(token, logger) {
   _botInfo = await _bot.getMe();
   _logFn('TG', `Bot @${_botInfo.username} (${_botInfo.first_name}) aktif`);
 
+  // Register system-wide Telegram senders so workflows triggered by
+  // non-TG sources (schedule/file/webhook) can still call tg.* nodes.
+  try {
+    const { setSystemTGSenders } = require('./workflow');
+    setSystemTGSenders({
+      sendFn:     async (chatId, text) => {
+        try {
+          await _bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+        } catch {
+          await _bot.sendMessage(chatId, text);
+        }
+      },
+      sendFileFn: async (chatId, mediaObj) => {
+        const opts = {};
+        if (mediaObj.caption)  opts.caption  = mediaObj.caption;
+        if (mediaObj.fileName) opts.filename = mediaObj.fileName;
+        if (mediaObj.photo)    return _bot.sendPhoto(chatId, mediaObj.photo, opts);
+        if (mediaObj.audio)    return _bot.sendAudio(chatId, mediaObj.audio, opts);
+        if (mediaObj.document) return _bot.sendDocument(chatId, mediaObj.document, opts);
+        throw new Error('mediaObj harus punya field photo/audio/document');
+      },
+    });
+  } catch (e) {
+    _logFn('WARN', `TG setSystemTGSenders: ${e.message}`);
+  }
+
   _bot.on('message', async (msg) => {
     try { await handleMessage(msg); } catch (e) {
       _logFn('ERROR', `TG msg: ${e.message}`);
@@ -68,8 +94,31 @@ async function handleMessage(msg) {
   const { getConfig } = require('./config');
   const cfg = getConfig(tid);
 
-  // /start or /help — onboarding
   const text = msg.text || msg.caption || '';
+
+  // Detect media type for workflow trigger extras
+  let mediaType = null, mediaMime = null;
+  if (msg.photo)         { mediaType = 'photo';    mediaMime = 'image/jpeg'; }
+  else if (msg.voice)    { mediaType = 'voice';    mediaMime = msg.voice.mime_type || 'audio/ogg'; }
+  else if (msg.audio)    { mediaType = 'audio';    mediaMime = msg.audio.mime_type || 'audio/mpeg'; }
+  else if (msg.document) { mediaType = 'document'; mediaMime = msg.document.mime_type || ''; }
+
+  // Workflow trigger dispatch — run BEFORE built-in /start/help & AI routing.
+  // If a workflow with trigger.exclusive=true handles this message, stop here.
+  try {
+    const { handleTGTrigger } = require('./workflow');
+    const sendFn = async (cid, txt) => {
+      try { await _bot.sendMessage(cid, txt, { parse_mode: 'Markdown' }); }
+      catch { await _bot.sendMessage(cid, txt); }
+    };
+    const extras = { mediaType, mediaMime };
+    const handled = await handleTGTrigger(tid, chatId, userId, text, sendFn, _logFn, extras);
+    if (handled) return;
+  } catch (e) {
+    _logFn('WARN', `TG trigger dispatch: ${e.message}`);
+  }
+
+  // /start or /help — onboarding
   if (text === '/start' || text === '/help') {
     await _bot.sendMessage(chatId,
       '*Halo! Aku Bima 🤖*\n\n' +
@@ -283,6 +332,10 @@ async function stopTelegram() {
     try { await _bot.stopPolling(); } catch {}
     _bot     = null;
     _botInfo = null;
+    try {
+      const { setSystemTGSenders } = require('./workflow');
+      setSystemTGSenders({ sendFn: null, sendFileFn: null });
+    } catch {}
     _logFn('TG', 'Bot dihentikan.');
   }
 }

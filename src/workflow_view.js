@@ -22,6 +22,9 @@ const NODE_STYLE = {
   'wa.send_media':  { icon: '🖼 ', color: C.green },
   'wa.send_sticker':{ icon: '🎭', color: C.green },
   'wa.send_poll':   { icon: '📊', color: C.green },
+  'tg.send':        { icon: '✈ ', color: C.blue },
+  'tg.send_to':     { icon: '📨', color: C.blue },
+  'tg.send_media':  { icon: '📤', color: C.blue },
   'wa.read_group':  { icon: '📖', color: C.cyan },
   'wa.transcribe':  { icon: '🎙 ', color: C.magenta },
   'wa.vision':      { icon: '👁 ', color: C.magenta },
@@ -82,6 +85,9 @@ function configSummary(node) {
     case 'wa.send_media': return `${cfg.type || '?'} ${clip(cfg.source, 30)}${cfg.caption ? ` cap:"${clip(cfg.caption, 20)}"` : ''}`;
     case 'wa.send_sticker': return `${clip(cfg.source, 35)}${cfg.jid ? ` → ${cfg.jid.split('@')[0]}` : ''}`;
     case 'wa.send_poll':  return `"${clip(cfg.question, 25)}" [${(cfg.options||[]).length} opsi]${cfg.selectableCount && cfg.selectableCount > 1 ? ` multi×${cfg.selectableCount}` : ''}`;
+    case 'tg.send':       return cfg.text     ? `"${clip(cfg.text, 40)}"` : '';
+    case 'tg.send_to':    return `→ ${cfg.chatId || '?'}: "${clip(cfg.text, 30)}"`;
+    case 'tg.send_media': return `${cfg.type || 'document'} ${clip(cfg.source, 30)}${cfg.caption ? ` cap:"${clip(cfg.caption, 20)}"` : ''}`;
     case 'file.create':   return `${cfg.name || '?'}${cfg.title ? ` "${clip(cfg.title, 20)}"` : ''}`;
     case 'file.edit':     return `${cfg.name || '?'} (backup .bak)`;
     default: return '';
@@ -211,6 +217,7 @@ function triggerLine(wf) {
   switch (t.type) {
     case 'schedule':       return `${C.cyan('⏱')}  schedule  ${C.bold(t.interval || '?')}`;
     case 'wa.message':     return `${C.green('💬')}  wa.message  match: ${C.bold(t.match || '*')}${t.exclusive ? ' (exclusive)' : ''}`;
+    case 'tg.message':     return `${C.blue('✈')}   tg.message  match: ${C.bold(t.match || '*')}${t.exclusive ? ' (exclusive)' : ''}`;
     case 'file':           return `${C.yellow('📁')}  file  path: ${C.bold(t.path || '?')}  events: ${(t.events||[]).join(',')}`;
     case 'webhook':        return `${C.blue('🔗')}  webhook  id: ${C.bold(t.webhookId || wf.id)}`;
     case 'wa.group_event': return `${C.magenta('👥')}  wa.group_event  actions: ${C.bold((t.actions||['add','remove']).join('/'))}`;

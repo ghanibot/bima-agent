@@ -75,6 +75,9 @@ const _DEFAULT_TIMEOUT_MS = {
   'wa.send_poll':    15000,
   'wa.transcribe': 120000, // STT can be slow on long audio
   'wa.vision':     90000,  // vision AI
+  'tg.send':       15000,
+  'tg.send_to':    15000,
+  'tg.send_media': 60000,
   'file.create':   30000,
   'file.edit':     30000,
   'file.fill_template': 60000,
@@ -203,6 +206,54 @@ const NODE_EXECUTORS = {
     if (!ctx._sendFn) return { ok: false, error: 'no _sendFn in context' };
     await ctx._sendFn(jid, text);
     return { ok: true, output: text };
+  },
+
+  // tg.send — kirim teks ke chat sumber Telegram (yang memicu workflow)
+  'tg.send': async (node, ctx) => {
+    const text = resolveVars(node.config?.text || '', ctx);
+    if (!text) return { ok: false, error: 'text kosong' };
+    if (!ctx._tgSendFn) return { ok: false, error: 'no _tgSendFn (bot belum aktif?)' };
+    if (!ctx._chatId) return { ok: false, error: 'no _chatId in context (run from TG trigger only)' };
+    await ctx._tgSendFn(ctx._chatId, text);
+    return { ok: true, output: text };
+  },
+
+  // tg.send_to — kirim teks ke chatId tertentu di Telegram
+  'tg.send_to': async (node, ctx) => {
+    const chatId = resolveVars(node.config?.chatId || '', ctx);
+    const text   = resolveVars(node.config?.text   || '', ctx);
+    if (!chatId || !text) return { ok: false, error: 'chatId/text kosong' };
+    if (!ctx._tgSendFn) return { ok: false, error: 'no _tgSendFn' };
+    await ctx._tgSendFn(chatId, text);
+    return { ok: true, output: text };
+  },
+
+  // tg.send_media — kirim dokumen/foto/audio ke Telegram chat
+  // config: { chatId?, type: "document"|"photo"|"audio", source: URL/path, caption?, filename? }
+  'tg.send_media': async (node, ctx) => {
+    if (!ctx._tgSendFileFn) return { ok: false, error: 'no _tgSendFileFn (bot belum aktif?)' };
+
+    const chatId  = resolveVars(node.config?.chatId || ctx._chatId || '', ctx);
+    const type    = (node.config?.type || 'document').toLowerCase();
+    const source  = resolveVars(node.config?.source || '', ctx);
+    const caption = node.config?.caption ? resolveVars(node.config.caption, ctx) : undefined;
+    const filename = node.config?.filename ? resolveVars(node.config.filename, ctx) : undefined;
+
+    if (!chatId) return { ok: false, error: 'chatId kosong' };
+    if (!source) return { ok: false, error: 'source kosong (URL atau path)' };
+    if (!['document', 'photo', 'audio'].includes(type)) {
+      return { ok: false, error: `type "${type}" tidak valid (document/photo/audio)` };
+    }
+
+    const buffer = await _fetchMediaSource(source);
+    if (!buffer) return { ok: false, error: `gagal ambil media dari "${source}"` };
+
+    const mediaObj = { [type]: buffer };
+    if (caption)  mediaObj.caption  = caption;
+    if (filename) mediaObj.fileName = filename;
+
+    await ctx._tgSendFileFn(chatId, mediaObj);
+    return { ok: true, output: `${type} terkirim ke ${chatId}` };
   },
 
   // ai.call — call AI with a prompt
@@ -445,15 +496,18 @@ const NODE_EXECUTORS = {
   },
 
   // file.edit — modify existing file (auto-backup .bak before overwrite)
-  // config: { name, content, title?, sheetName? }
+  // config: { name, content, title?, sheetName?, mode? }
+  //   mode: "replace" (default — regenerate) | "append_page" | "stamp_header"
+  //         | "stamp_footer" | "append_text" (preserve modes — PDF only)
   'file.edit': async (node, ctx) => {
-    const { editFile, findFile } = require('./filemaker');
-    const { tenantPaths }        = require('./tenant');
+    const { editFile, editPDFPreserve, findFile } = require('./filemaker');
+    const { tenantPaths }                         = require('./tenant');
     const filesDir = tenantPaths(ctx._tenantId || 'default').files;
 
     const name    = resolveVars(node.config?.name || '', ctx);
     const content = resolveVars(String(node.config?.content ?? ctx.lastOutput ?? ''), ctx);
     const title   = node.config?.title ? resolveVars(node.config.title, ctx) : undefined;
+    const mode    = String(node.config?.mode || 'replace').toLowerCase();
 
     if (!name) return { ok: false, error: 'config.name kosong' };
 
@@ -465,6 +519,33 @@ const NODE_EXECUTORS = {
       const found = findFile(name, filesDir);
       if (!found) return { ok: false, error: `File "${name}" tidak ditemukan di knowledge base` };
       targetName = found.name;
+    }
+
+    const PRESERVE_MODES = new Set(['append_page', 'stamp_header', 'stamp_footer', 'append_text']);
+    const ext = path.extname(targetName).toLowerCase();
+
+    if (PRESERVE_MODES.has(mode)) {
+      if (ext !== '.pdf') {
+        // Fall back to replace for non-PDF files
+        try {
+          const result = await editFile(targetName, content, filesDir, { title, sheetName: node.config?.sheetName });
+          return { ok: true, output: `${targetName} (mode "${mode}" hanya untuk PDF — fallback replace; backup: ${path.basename(result.backup)})` };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      }
+      try {
+        const result = await editPDFPreserve(targetName, content, filesDir, {
+          mode,
+          fontSize: node.config?.fontSize,
+          color:    node.config?.color,
+          x:        node.config?.x,
+          y:        node.config?.y,
+        });
+        return { ok: true, output: `${targetName} (mode: ${mode}, backup: ${path.basename(result.backup)})` };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
     }
 
     try {
@@ -877,6 +958,16 @@ function setSystemSenders({ sendFn, sendMediaFn } = {}) {
 // (e.g. agent.js send_sticker tool). Returns null if WA isn't connected.
 function getSystemSendMediaFn() { return _systemSendMediaFn; }
 
+// ── System-wide Telegram senders (set by telegram.js on bot start) ──
+// Workflows triggered by tg.message inherit these so they can call tg.send / tg.send_media.
+let _systemTGSendFn     = null;
+let _systemTGSendFileFn = null;
+
+function setSystemTGSenders({ sendFn, sendFileFn } = {}) {
+  if (sendFn     !== undefined) _systemTGSendFn     = sendFn;
+  if (sendFileFn !== undefined) _systemTGSendFileFn = sendFileFn;
+}
+
 // ── DAG runner ────────────────────────────────────────────────
 async function runWorkflow(wf, context, logFn) {
   const ctx = { ...context, _logFn: logFn, _wf: wf }; // _wf for loop/parallel/sub-workflow
@@ -884,6 +975,8 @@ async function runWorkflow(wf, context, logFn) {
   // Inject system-wide senders if not already provided by caller
   if (!ctx._sendFn      && _systemSendFn)      ctx._sendFn      = _systemSendFn;
   if (!ctx._sendMediaFn && _systemSendMediaFn) ctx._sendMediaFn = _systemSendMediaFn;
+  if (!ctx._tgSendFn     && _systemTGSendFn)     ctx._tgSendFn     = _systemTGSendFn;
+  if (!ctx._tgSendFileFn && _systemTGSendFileFn) ctx._tgSendFileFn = _systemTGSendFileFn;
 
   // Generate a stable runId now so we can correlate the active-run marker
   // with the saved history entry below.
@@ -1328,6 +1421,68 @@ async function handleWATrigger(tenantId, jid, sender, text, sendFn, logFn, extra
   return handled;
 }
 
+// ── Telegram message trigger — called from telegram.js ───────
+// Returns true if a workflow handled the message (caller should skip normal AI)
+// extras (optional): { mediaType, mediaMime, downloadMedia }
+async function handleTGTrigger(tenantId, chatId, userId, text, sendFn, logFn, extras = {}) {
+  const workflows = listWorkflows(tenantId);
+  let handled = false;
+
+  for (const wf of workflows) {
+    if (!wf.enabled) continue;
+    if (wf.trigger?.type !== 'tg.message') continue;
+
+    const match     = wf.trigger.match;
+    const mediaOnly = wf.trigger.mediaOnly === true;
+    const triggerOnMedia = wf.trigger.onMedia; // 'photo' | 'voice' | 'audio' | 'document' | 'any' | undefined
+
+    // Skip non-media messages if workflow is media-only
+    if (mediaOnly && !extras.mediaType) continue;
+
+    // If workflow specifies onMedia filter, require matching media type
+    if (triggerOnMedia && triggerOnMedia !== 'any' && extras.mediaType !== triggerOnMedia) continue;
+
+    let triggered = false;
+    if (mediaOnly && extras.mediaType) {
+      triggered = true;
+    } else if (!match) {
+      triggered = !!text;
+    } else if (match.startsWith('/') && match.endsWith('/')) {
+      try { triggered = new RegExp(match.slice(1, -1), 'i').test(text || ''); } catch {}
+    } else {
+      triggered = (text || '').toLowerCase().includes(match.toLowerCase());
+    }
+
+    if (!triggered) continue;
+
+    const ctx = {
+      _tenantId:      tenantId,
+      _chatId:        chatId,
+      _userId:        userId,
+      _text:          text,
+      _tgSendFn:      sendFn || _systemTGSendFn,
+      _tgSendFileFn:  _systemTGSendFileFn,
+      _downloadMedia: extras.downloadMedia || null,
+      _mediaType:     extras.mediaType     || null,
+      _mediaMime:     extras.mediaMime     || null,
+      _trigger:       'tg.message',
+      message:        text,
+      sender_jid:     userId, // alias for compatibility with WA-style template vars
+      chat_id:        chatId,
+      user_id:        userId,
+      media_type:     extras.mediaType || null,
+    };
+
+    runWorkflow(wf, ctx, logFn).catch(e => {
+      if (logFn) logFn('WF', `TG trigger error [${wf.id}]: ${e.message}`);
+    });
+
+    if (wf.trigger?.exclusive) handled = true;
+  }
+
+  return handled;
+}
+
 // ── File watch triggers ───────────────────────────────────────
 const _fileWatchers = new Map(); // key: `${tenantId}::${wfId}`
 
@@ -1548,6 +1703,9 @@ module.exports = {
   handleWATrigger,
   setSystemSenders,
   getSystemSendMediaFn,
+  // Telegram message
+  handleTGTrigger,
+  setSystemTGSenders,
   // exposed for agent tools (e.g. send_sticker)
   _fetchMediaSource,
   // admin notification (exported for testing)

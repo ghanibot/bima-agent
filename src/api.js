@@ -855,6 +855,48 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // ════════════════════════════════════════════════════════════
+  // Chat (admin UI inline chat with the agent)
+  // ════════════════════════════════════════════════════════════
+
+  // POST /api/chat
+  if (route === '/api/chat' && method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const message = String(body.message || '').trim();
+      const history = Array.isArray(body.history) ? body.history : [];
+      if (!message) { send(res, 400, { error: 'Butuh: message' }); return; }
+      if (!_runQuery) { send(res, 503, { error: 'Agent belum siap' }); return; }
+
+      // Build a prompt that includes recent conversation context (last 10 turns).
+      let prompt = message;
+      if (history.length) {
+        const trimmed = history.slice(-10).filter(t => t && t.role && t.content);
+        if (trimmed.length) {
+          const ctx = trimmed.map(t => {
+            const role = t.role === 'user' ? 'User' : 'Bima';
+            return role + ': ' + String(t.content);
+          }).join('\n');
+          prompt = 'Riwayat percakapan sebelumnya:\n' + ctx + '\n\nUser: ' + message;
+        }
+      }
+
+      const t0 = Date.now();
+      const result = await _runQuery(prompt, _tenantId());
+      const took = Date.now() - t0;
+      // runAgent returns { answer, steps } — extract the text
+      const reply = typeof result === 'string'
+        ? result
+        : (result && result.answer) || JSON.stringify(result || '');
+      pushActivity('CHAT', 'Q: ' + message.slice(0, 60) + (message.length > 60 ? '...' : ''));
+      send(res, 200, { ok: true, reply: String(reply || ''), took });
+    } catch (e) {
+      pushActivity('ERROR', 'Chat: ' + e.message);
+      send(res, 500, { error: e.message });
+    }
+    return;
+  }
+
   send(res, 404, { error: 'Route tidak ditemukan' });
 }
 

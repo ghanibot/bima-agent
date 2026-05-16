@@ -14,7 +14,7 @@ SCHEMA WORKFLOW
   "description": string  — penjelasan singkat
   "enabled":     false   — selalu false saat baru dibuat
   "trigger": {
-    "type":      "manual" | "wa.message" | "schedule" | "file" | "webhook" | "wa.group_event"
+    "type":      "manual" | "wa.message" | "tg.message" | "schedule" | "file" | "webhook" | "wa.group_event"
     "match":     string   — keyword/regex (wa.message saja)
     "exclusive": boolean  — true = hentikan AI normal jika trigger cocok (wa.message)
     "onMedia":   "audio"|"image"|"video"|"document"|"any"  — fire only on media of this type (wa.message)
@@ -88,6 +88,21 @@ wa.send_poll — kirim poll/voting ke chat
     question: string,      // pertanyaan poll
     options: string[],     // 2-12 opsi (string)
     selectableCount?: number  // 1 (default, single-choice) atau >1 (multi-choice)
+  }
+
+tg.send       — kirim pesan ke chat Telegram sumber (dari trigger tg.message)
+  config: { text: string }
+
+tg.send_to    — kirim pesan Telegram ke chatId tertentu
+  config: { chatId: string, text: string }
+
+tg.send_media — kirim media Telegram (document/photo/audio)
+  config: {
+    chatId?: string,                 // default: chat sumber trigger
+    type: "document" | "photo" | "audio",
+    source: string,                  // URL atau path file
+    caption?: string,
+    filename?: string                // document only
   }
 
 file.create   — BUAT file baru di knowledge base (pdf/docx/xlsx/txt)
@@ -281,6 +296,7 @@ function validateWorkflow(wf) {
     'loop', 'repeat', 'parallel', 'workflow.run',
     'wa.transcribe', 'wa.vision', 'wa.send_media',
     'wa.send_sticker', 'wa.send_poll',
+    'tg.send', 'tg.send_to', 'tg.send_media',
     'file.create', 'file.edit', 'file.fill_template',
   ]);
 
