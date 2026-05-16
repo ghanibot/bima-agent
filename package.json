@@ -16,7 +16,8 @@
   ],
   "scripts": {
     "start": "node src/cli.js",
-    "daemon": "node src/daemon.js"
+    "daemon": "node src/daemon.js",
+    "test": "node --test test/*.test.js"
   },
   "repository": {
     "type": "git",

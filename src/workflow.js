@@ -4,6 +4,7 @@ const fs            = require('fs');
 const path          = require('path');
 const os            = require('os');
 const { execFile, spawn } = require('child_process');
+const _state        = require('./state');
 
 const DATA_DIR = process.env.BIMA_DATA || path.join(os.homedir(), '.bima');
 
@@ -751,13 +752,37 @@ async function runWorkflow(wf, context, logFn) {
   // Inject system-wide senders if not already provided by caller
   if (!ctx._sendFn      && _systemSendFn)      ctx._sendFn      = _systemSendFn;
   if (!ctx._sendMediaFn && _systemSendMediaFn) ctx._sendMediaFn = _systemSendMediaFn;
+
+  // Generate a stable runId now so we can correlate the active-run marker
+  // with the saved history entry below.
+  const startedAt = Date.now();
+  const runId     = `${startedAt}-${Math.random().toString(36).slice(2, 6)}`;
+  const tenantId  = context._tenantId || 'default';
+  const trigger   = context._trigger || 'unknown';
+  const isTest    = !wf.id || String(wf.id).startsWith('test_');
+
   const run = {
+    runId,
     workflowId: wf.id,
-    startedAt:  Date.now(),
+    startedAt,
     steps:      [],
     ok:         true,
     error:      null,
   };
+
+  // Mark this run as in-flight so a crash mid-execution is detectable.
+  // Skip test runs (consistent with run-history skip).
+  if (!isTest) {
+    try {
+      _state.addActiveRun(tenantId, {
+        runId,
+        workflowId: wf.id,
+        startedAt,
+        trigger,
+        pid: process.pid,
+      });
+    } catch {}
+  }
 
   let nodeId = wf.entry;
   const visited = new Set();
@@ -831,10 +856,15 @@ async function runWorkflow(wf, context, logFn) {
   }
 
   run.durationMs = Date.now() - run.startedAt;
-  run.trigger    = context._trigger || 'unknown';
+  run.trigger    = trigger;
+
+  // Clear the active-run marker (both success and failure paths reach here).
+  if (!isTest) {
+    try { _state.removeActiveRun(tenantId, runId); } catch {}
+  }
 
   // Persist run history (async, non-blocking)
-  _saveRunHistory(context._tenantId || 'default', run).catch(() => {});
+  _saveRunHistory(tenantId, run).catch(() => {});
 
   return run;
 }
@@ -865,13 +895,17 @@ async function _saveRunHistory(tenantId, run) {
       ok:         run.ok,
       error:      run.error || null,
       trigger:    run.trigger || 'unknown',
-      stepCount:  run.steps.length,
-      failedNode: run.steps.find(s => !s.ok)?.nodeId || null,
+      stepCount:  Array.isArray(run.steps) ? run.steps.length : 0,
+      failedNode: Array.isArray(run.steps) ? (run.steps.find(s => !s.ok)?.nodeId || null) : null,
     };
 
     runs.push(compact);
     if (runs.length > MAX_RUNS) runs = runs.slice(-MAX_RUNS);
-    fs.writeFileSync(p, JSON.stringify(runs));
+
+    // Atomic write — prevents corrupted JSON if process is killed mid-write.
+    const tmp = p + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(runs));
+    fs.renameSync(tmp, p);
   } catch {}
 }
 
@@ -882,6 +916,75 @@ function getRunHistory(tenantId, wfId, limit = 20) {
     const runs = JSON.parse(fs.readFileSync(p, 'utf8'));
     return runs.slice(-limit).reverse(); // newest first
   } catch { return []; }
+}
+
+// ── Boot-time crash sweep ─────────────────────────────────────
+// On module load, scan _active_runs.json for every tenant. Any entry whose
+// pid is no longer alive → write a synthetic 'interrupted' run-history entry,
+// remember it in-process (so cli can surface a boot notice), then drop it
+// from active_runs.json. Runs exactly once per process.
+const _interruptedByTenant = new Map(); // tenantId → [entry, ...]
+let _crashSweepDone = false;
+function _runCrashSweep() {
+  if (_crashSweepDone) return;
+  _crashSweepDone = true;
+  try {
+    const tenants = _state.listTenantDirs();
+    for (const tid of tenants) {
+      let arr;
+      try { arr = _state.readActiveRuns(tid); } catch { continue; }
+      if (!arr || !arr.length) continue;
+
+      const survivors = [];
+      const interrupted = [];
+      for (const entry of arr) {
+        if (!entry || !entry.runId) continue;
+        // Same pid = still running in this very process (shouldn't happen at
+        // module-load time, but be safe).
+        if (entry.pid === process.pid) { survivors.push(entry); continue; }
+        // Other pid still alive = a sibling process owns it. Leave alone.
+        if (_state.pidAlive(entry.pid)) { survivors.push(entry); continue; }
+
+        // Dead pid → synthesize an interrupted run-history entry.
+        const synthetic = {
+          runId:      entry.runId,
+          workflowId: entry.workflowId,
+          startedAt:  entry.startedAt || Date.now(),
+          durationMs: 0,
+          steps:      [],
+          ok:         false,
+          error:      'interrupted (process crashed)',
+          trigger:    entry.trigger || 'unknown',
+        };
+        // Fire-and-forget. Atomic write handles partial-file safety.
+        _saveRunHistory(tid, synthetic).catch(() => {});
+        interrupted.push(entry);
+      }
+      if (interrupted.length) _interruptedByTenant.set(tid, interrupted);
+      try { _state.writeActiveRuns(tid, survivors); } catch {}
+    }
+  } catch {}
+}
+// Run once at module load.
+_runCrashSweep();
+
+// Returns runs interrupted by a previous crash (detected during this process's
+// boot sweep), PLUS any current active_runs.json entries owned by a different
+// pid — covers both "we just booted after a crash" and "another bima process
+// died while we were running". Entries owned by the current pid are excluded.
+function getInterruptedRuns(tenantId) {
+  const out = [];
+  try {
+    const swept = _interruptedByTenant.get(tenantId);
+    if (Array.isArray(swept)) out.push(...swept);
+  } catch {}
+  try {
+    const live = _state.readActiveRuns(tenantId);
+    for (const e of live) {
+      if (e && e.pid !== process.pid) out.push(e);
+    }
+  } catch {}
+  return out;
 }
 
 function getRunStats(tenantId, wfId) {
@@ -1219,6 +1322,7 @@ module.exports = {
   // history / monitoring
   getRunHistory,
   getRunStats,
+  getInterruptedRuns,
   // schedule
   scheduleWorkflow,
   unscheduleWorkflow,

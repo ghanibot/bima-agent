@@ -12,6 +12,7 @@ const { getKnowledge, searchKnowledge, searchKnowledgeSemantic, compactKnowledge
 const { testAI, answerQuestion } = require('./ai');
 const { listTenants, addTenant, updateTenant, deleteTenant, getTenant, tenantPaths } = require('./tenant');
 const { isSetupDone, runWizard } = require('./init');
+const { runOnboarding } = require('./onboarding');
 const ui      = require('./ui');
 const plugins = require('./plugins');
 
@@ -75,6 +76,7 @@ function resolveAtFiles(input) {
 function cmdHelp() {
   const cmds = [
     ['/help',      'Tampilkan daftar perintah ini'],
+    ['/start',     'Wizard pengaturan awal (cocok untuk user baru)'],
     ['/wa',        'Hubungkan WhatsApp (scan QR)'],
     ['/status',    'Status koneksi & konfigurasi'],
     ['/model',     'Set AI provider & API key'],
@@ -2103,6 +2105,23 @@ async function main() {
     } catch {}
   }, 4000);
 
+  // Report any workflow runs that were interrupted by a previous crash.
+  // The workflow module already converted them into history entries at load
+  // time; here we just surface the count to the user. Non-blocking.
+  setTimeout(() => {
+    try {
+      const { getInterruptedRuns } = require('./workflow');
+      const { listTenants: lT2 } = require('./tenant');
+      const allTenants = lT2().map(t => t.id);
+      if (!allTenants.includes('default')) allTenants.push('default');
+      let total = 0;
+      for (const tid of allTenants) {
+        try { total += (getInterruptedRuns(tid) || []).length; } catch {}
+      }
+      if (total > 0) ui.log('WF', `⚠ ${total} workflow run interrupted (crash sebelumnya)`);
+    } catch {}
+  }, 4500);
+
   // Auto-connect WA if session exists
   const authDir = process.env.BIMA_DATA
     ? path.join(process.env.BIMA_DATA, 'auth')
@@ -2139,6 +2158,23 @@ async function main() {
     setTimeout(() => cmdApi(['start', String(apiPort)]), 1500);
   }
 
+  // Auto-launch onboarding wizard for first-time users.
+  // Delay 3s so welcome doesn't collide with WA/TG/workflow status messages.
+  setTimeout(() => {
+    try {
+      const _cfg = getConfig(_currentTenant) || {};
+      if (!_cfg.onboarded) {
+        runOnboarding(_currentTenant, {
+          cmdModel, cmdWA, cmdSetGroup, cmdApi,
+          ui, ask, println,
+          getConfig, saveConfig, getWAStatus,
+        }).catch(e => ui.log('ONBOARD', `Wizard error: ${e.message}`));
+      }
+    } catch (e) {
+      try { ui.log('ONBOARD', `Auto-launch gagal: ${e.message}`); } catch {}
+    }
+  }, 3000);
+
   // Set up input handler
   ui.onInput(async (line) => {
     // Echo user input to chat panel
@@ -2146,6 +2182,13 @@ async function main() {
 
     try {
       if (line === '/help')                { cmdHelp(); }
+      else if (line === '/start')          {
+        await runOnboarding(_currentTenant, {
+          cmdModel, cmdWA, cmdSetGroup, cmdApi,
+          ui, ask, println,
+          getConfig, saveConfig, getWAStatus,
+        });
+      }
       else if (line === '/status')         { cmdStatus(); }
       else if (line === '/wa')             { await cmdWA(); }
       else if (line === '/model')          { await cmdModel(); }
