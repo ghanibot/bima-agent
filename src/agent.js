@@ -48,7 +48,10 @@ TOOLS TERSEDIA:
 23. edit_file(input)              - UBAH isi file yang sudah ada (otomatis backup .bak). Input: JSON {"name":"namafile.pdf","content":"isi baru","title":"opsional"}
 24. fill_template(input)          - ISI template docx/xlsx yang punya placeholder {{nama}}, {{umur}}, dst. Input: JSON {"template":"surat_template.docx","data":{"nama":"Rahmat","umur":12},"outputName":"opsional"}
 25. send_sticker(input)           - Kirim sticker (webp) ke chat WhatsApp. Input: JSON {"jid":"628xxx@s.whatsapp.net","source":"URL atau path file .webp"}. WAJIB file webp.
-26. final_answer(text)            - Kirim jawaban akhir ke pengguna
+26. send_file(input)              - Kirim file (PDF/docx/xlsx/dll) dari KB ke chat WhatsApp sebagai dokumen.
+                                    Input: JSON {"name":"laporan.pdf","jid":"opsional","caption":"opsional","mode":"raw|compact"}
+                                    mode="raw" (default) kirim file asli; mode="compact" kirim versi ringkas (perlu /compact dulu).
+27. final_answer(text)            - Kirim jawaban akhir ke pengguna
 
 FORMAT RESPONS - balas HANYA JSON valid, tidak ada teks lain:
 {"thought":"pikirku singkat","action":"nama_tool","input":"parameter"}
@@ -92,6 +95,14 @@ ATURAN TOOL — PRIORITAS WAJIB:
 15. ANTI-OVERWRITE: Tool create_file otomatis auto-rename kalau nama sudah dipakai
     (mis. catatan.pdf → catatan_1.pdf). Untuk update file yang sudah ada, WAJIB pakai
     edit_file (bukan create_file dengan nama sama).
+16. User minta KIRIM file (PDF/docx/dll) ke WhatsApp → send_file
+    Contoh: "kirim file laporan.pdf ke grup", "tolong kirim daftar_uangjajan.pdf"
+    - Default mode="raw" (kirim file asli/utuh).
+    - mode="compact" untuk kirim versi ringkas (hanya jika user minta "ringkasan" /
+      "compact" / "summary" dan file sudah pernah di-compact via /compact CLI).
+    - Wajib: list_files() DULU untuk pastikan file ada (nama-prefix timestamp seperti
+      "1778221637723_X.pdf" akan dibersihkan otomatis saat dikirim).
+    - jid: kalau user di grup, otomatis pakai grup itu. Kalau user di DM, otomatis pakai DM.
 
 ATURAN JAWABAN:
 - Setiap jawaban HARUS diakhiri dengan 1-2 saran atau langkah lanjutan yang relevan.
@@ -102,7 +113,7 @@ ATURAN JAWABAN:
 }
 
 // Search-type tools — trigger "sedang mencari" indicator
-const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket', 'get_my_mentions', 'get_conversation_patterns', 'lookup_contact', 'list_contacts', 'edit_office', 'create_file', 'edit_file', 'fill_template', 'send_sticker']);
+const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket', 'get_my_mentions', 'get_conversation_patterns', 'lookup_contact', 'list_contacts', 'edit_office', 'create_file', 'edit_file', 'fill_template', 'send_sticker', 'send_file']);
 
 // ── Main agent loop ───────────────────────────────────────────
 // onToolCall(action, input) — optional async callback before each tool executes
@@ -627,6 +638,117 @@ async function executeTool(action, input, tools, tenantId) {
         return `✓ Sticker terkirim ke ${String(opts.jid).split('@')[0]}.`;
       } catch (e) {
         return `Gagal kirim sticker: ${e.message}`;
+      }
+    }
+
+    case 'send_file': {
+      // Send a file from KB (or path/URL) to a WhatsApp JID as document.
+      // Input JSON: { name, jid?, caption?, mode? }
+      //   - name:    nama file di KB, atau URL, atau absolute path
+      //   - jid:     tujuan; default = jid yang sedang chat (groupJid/senderJid)
+      //   - caption: teks pendamping (opsional)
+      //   - mode:    "raw" (default — kirim file asli), "compact" (render compact_text → PDF), "summary" (alias compact)
+      const { getSystemSendMediaFn, _fetchMediaSource } = require('./workflow');
+      const sendMediaFn = getSystemSendMediaFn();
+      if (!sendMediaFn) return 'Error: WhatsApp belum terhubung — file tidak bisa dikirim sekarang.';
+
+      let opts;
+      try { opts = typeof input === 'string' ? JSON.parse(input) : input; }
+      catch { return 'Error: input harus JSON. Contoh: {"name":"laporan.pdf","jid":"628xxx@s.whatsapp.net"}'; }
+      if (!opts || !opts.name) return 'Error: field "name" wajib (nama file di KB, URL, atau path).';
+
+      const targetJid = String(opts.jid || groupJid || senderJid || '').trim();
+      if (!targetJid) return 'Error: field "jid" wajib (tidak ada konteks chat aktif).';
+
+      const fs   = require('fs');
+      const path = require('path');
+      const { tenantPaths } = require('./tenant');
+      const filesDir = tenantPaths(tid).files;
+
+      const mode = (opts.mode || 'raw').toLowerCase();
+
+      // ── Mode: compact / summary — generate PDF from doc.compact_text ──
+      if (mode === 'compact' || mode === 'summary') {
+        try {
+          const { findFile, createPDF } = require('./filemaker');
+          const { searchAllFiles } = require('./db');
+          const stem = path.parse(opts.name).name;
+          const docs = searchAllFiles(tid) || [];
+          const found = docs.find(d => d.file && d.file.toLowerCase().includes(stem.toLowerCase())) || null;
+          if (!found || !found.compact_text) {
+            return `Belum ada versi compact untuk "${opts.name}". Jalankan /compact dulu, atau pakai mode "raw".`;
+          }
+          const outName = stem + '_compact.pdf';
+          const outPath = await createPDF(outName, found.compact_text, filesDir, {
+            title: 'Versi Ringkas: ' + stem,
+            overwrite: true,
+          });
+          const buf = fs.readFileSync(outPath);
+          await sendMediaFn(targetJid, {
+            document: buf,
+            mimetype: 'application/pdf',
+            fileName: outName,
+            caption:  opts.caption ? String(opts.caption) : 'Versi ringkas',
+          });
+          return `✓ PDF compact dikirim: ${outName} → ${targetJid.split('@')[0]}.`;
+        } catch (e) {
+          return `Gagal kirim compact: ${e.message}`;
+        }
+      }
+
+      // ── Mode: raw — resolve file by name (fuzzy), URL, or path ──
+      let buffer = null;
+      let fileName = path.basename(opts.name);
+      let mimetype = 'application/octet-stream';
+
+      if (/^https?:\/\//i.test(opts.name)) {
+        buffer = await _fetchMediaSource(opts.name);
+        if (!buffer) return `Gagal ambil file dari URL "${opts.name}".`;
+      } else if (fs.existsSync(opts.name) && fs.statSync(opts.name).isFile()) {
+        buffer = fs.readFileSync(opts.name);
+        fileName = path.basename(opts.name);
+      } else {
+        const { findFile } = require('./filemaker');
+        let direct = path.join(filesDir, fileName);
+        if (!fs.existsSync(direct)) {
+          const f = findFile(opts.name, filesDir);
+          if (!f) return `File "${opts.name}" tidak ditemukan di knowledge base. Coba list_files() untuk lihat nama persisnya.`;
+          direct = path.join(filesDir, f.name);
+          fileName = f.name;
+        }
+        buffer = fs.readFileSync(direct);
+      }
+
+      // MIME by extension
+      const ext = path.extname(fileName).toLowerCase();
+      const MIME = {
+        '.pdf':  'application/pdf',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        '.txt':  'text/plain',
+        '.csv':  'text/csv',
+        '.md':   'text/markdown',
+        '.json': 'application/json',
+        '.png':  'image/png',
+        '.jpg':  'image/jpeg',
+        '.jpeg': 'image/jpeg',
+      };
+      mimetype = MIME[ext] || 'application/octet-stream';
+
+      // Strip timestamp prefix from filename if present (e.g. "1778221637723_LAPORAN.pdf" → "LAPORAN.pdf")
+      const cleanName = fileName.replace(/^\d{10,}_/, '');
+
+      try {
+        await sendMediaFn(targetJid, {
+          document: buffer,
+          mimetype,
+          fileName: cleanName,
+          caption:  opts.caption ? String(opts.caption) : undefined,
+        });
+        return `✓ File "${cleanName}" terkirim ke ${targetJid.split('@')[0]} (${(buffer.length/1024).toFixed(1)} KB).`;
+      } catch (e) {
+        return `Gagal kirim file: ${e.message}`;
       }
     }
 
