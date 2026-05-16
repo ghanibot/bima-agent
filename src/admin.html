@@ -1007,6 +1007,7 @@ function makeDraggable(el, node) {
   var startX, startY, origX, origY, dragging = false;
   el.addEventListener('mousedown', function(e) {
     if (e.target.classList.contains('node-port')) return;
+    if (e.button !== 0) return; // only left-button drags
     e.stopPropagation();
     selectNode(node.id);
     dragging = true;
@@ -1014,6 +1015,13 @@ function makeDraggable(el, node) {
     origX = node.x; origY = node.y;
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
+  });
+  // Right-click → context menu on this node
+  el.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    selectNode(node.id);
+    showNodeContextMenu(e.clientX, e.clientY, node);
   });
   function onMove(e) {
     if (!dragging) return;
@@ -1028,6 +1036,100 @@ function makeDraggable(el, node) {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
   }
+}
+
+// ── Builder context menu (right-click) ───────────────────────────
+var _builderClipboard = null;   // serialized node object (without id collisions)
+
+function showNodeContextMenu(x, y, node) {
+  closeBuilderContextMenu();
+  var items = [
+    { label: '✂ Copy',        action: function() { _builderClipboard = JSON.parse(JSON.stringify(node)); toast('Node disalin'); } },
+    { label: '⎘ Duplicate',   action: function() { duplicateNode(node.id); } },
+    { label: '📌 Set as Entry', action: function() { setEntry(node.id); } },
+    { label: '🗑 Hapus',       action: function() { deleteNode(node.id); } },
+  ];
+  _renderContextMenu(x, y, items);
+}
+
+function showCanvasContextMenu(x, y, canvasX, canvasY) {
+  closeBuilderContextMenu();
+  var items = [];
+  if (_builderClipboard) {
+    items.push({ label: '📋 Paste', action: function() { pasteNode(canvasX, canvasY); } });
+  }
+  items.push({ label: '➕ Tambah node…', action: function() { alert('Drag node dari palette kiri ke canvas.'); } });
+  if (items.length === 0) return;
+  _renderContextMenu(x, y, items);
+}
+
+function _renderContextMenu(x, y, items) {
+  var menu = document.createElement('div');
+  menu.id = 'builder-ctx-menu';
+  menu.style.cssText =
+    'position:fixed;left:' + x + 'px;top:' + y + 'px;background:#1e293b;border:1px solid #334155;' +
+    'border-radius:6px;padding:4px 0;min-width:160px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.5);' +
+    'font-size:.85rem';
+  items.forEach(function(item) {
+    var row = document.createElement('div');
+    row.textContent = item.label;
+    row.style.cssText = 'padding:6px 14px;cursor:pointer;color:#e2e8f0';
+    row.onmouseenter = function() { row.style.background = '#334155'; };
+    row.onmouseleave = function() { row.style.background = ''; };
+    row.onclick = function() { closeBuilderContextMenu(); try { item.action(); } catch(e) { alert('Error: ' + e.message); } };
+    menu.appendChild(row);
+  });
+  document.body.appendChild(menu);
+  // Close on next click anywhere else
+  setTimeout(function() {
+    document.addEventListener('click', closeBuilderContextMenu, { once: true });
+    document.addEventListener('contextmenu', closeBuilderContextMenu, { once: true });
+  }, 50);
+}
+
+function closeBuilderContextMenu() {
+  var m = document.getElementById('builder-ctx-menu');
+  if (m) m.remove();
+}
+
+function duplicateNode(id) {
+  var src = BLD.nodes.find(function(n){ return n.id === id; });
+  if (!src) return;
+  var copy = JSON.parse(JSON.stringify(src));
+  copy.id   = uid(copy.type);
+  copy.x    = (src.x || 0) + 30;
+  copy.y    = (src.y || 0) + 30;
+  copy.next = null;            // don't double-wire
+  if (copy.branches) copy.branches = { true: null, false: null };
+  BLD.nodes.push(copy);
+  selectNode(copy.id);
+  renderCanvas();
+  toast('Node diduplikat: ' + copy.id);
+}
+
+function pasteNode(x, y) {
+  if (!_builderClipboard) return;
+  var copy = JSON.parse(JSON.stringify(_builderClipboard));
+  copy.id   = uid(copy.type);
+  copy.x    = Math.max(0, x | 0);
+  copy.y    = Math.max(0, y | 0);
+  copy.next = null;
+  if (copy.branches) copy.branches = { true: null, false: null };
+  BLD.nodes.push(copy);
+  selectNode(copy.id);
+  renderCanvas();
+  toast('Node di-paste: ' + copy.id);
+}
+
+function toast(msg) {
+  var t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText =
+    'position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:#0f4d2a;color:#22c55e;' +
+    'padding:8px 16px;border:1px solid #22c55e;border-radius:6px;z-index:10000;font-size:.85rem';
+  document.body.appendChild(t);
+  setTimeout(function() { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; }, 1200);
+  setTimeout(function() { try { t.remove(); } catch(e){} }, 1700);
 }
 
 function bindCanvasEvents() {
@@ -1083,6 +1185,32 @@ function bindCanvasEvents() {
   document.getElementById('wf-canvas').addEventListener('click', function(e) {
     if (e.target.id === 'wf-canvas' || e.target.id === 'wf-canvas-svg') {
       selectNode(null);
+    }
+  });
+  // Right-click on empty canvas → context menu (paste)
+  document.getElementById('wf-canvas').addEventListener('contextmenu', function(e) {
+    if (e.target.id !== 'wf-canvas' && e.target.id !== 'wf-canvas-svg') return;
+    e.preventDefault();
+    var rect = e.currentTarget.getBoundingClientRect();
+    var cx = e.clientX - rect.left + e.currentTarget.scrollLeft - 60;
+    var cy = e.clientY - rect.top  + e.currentTarget.scrollTop  - 20;
+    showCanvasContextMenu(e.clientX, e.clientY, Math.max(0, cx), Math.max(0, cy));
+  });
+  // Keyboard shortcuts: Delete (delete node), Ctrl+D (duplicate), Ctrl+C/V (copy/paste)
+  document.addEventListener('keydown', function(e) {
+    var tab = document.getElementById('tab-builder');
+    if (!tab || !tab.classList.contains('active')) return;
+    // Skip when typing in input/textarea
+    if (/INPUT|TEXTAREA|SELECT/.test((e.target.tagName || '').toUpperCase())) return;
+    if (e.key === 'Delete' && BLD.selectedId) { e.preventDefault(); deleteNode(BLD.selectedId); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && BLD.selectedId) { e.preventDefault(); duplicateNode(BLD.selectedId); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && BLD.selectedId) {
+      var n = BLD.nodes.find(function(x){ return x.id === BLD.selectedId; });
+      if (n) { _builderClipboard = JSON.parse(JSON.stringify(n)); toast('Node disalin'); }
+    }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && _builderClipboard) {
+      e.preventDefault();
+      pasteNode(80 + Math.random() * 100, 80 + Math.random() * 100);
     }
   });
 }
@@ -1591,11 +1719,12 @@ function connectWAModal() {
     try {
       var d = JSON.parse(ev.data);
       if (d.qr) {
-        var url = 'https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=' + encodeURIComponent(d.qr);
+        // Prefer server-rendered data URI (qrcode npm). Fallback to raw text if missing.
+        var url = d.dataUrl || ('https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(d.qr));
         var wrap = document.getElementById('qr-img-wrap');
-        if (wrap) wrap.innerHTML = '<img src="' + url + '" alt="WhatsApp QR">';
+        if (wrap) wrap.innerHTML = '<img src="' + url + '" alt="WhatsApp QR" style="width:300px;height:300px;display:block">';
         var s = document.getElementById('qr-status');
-        if (s) s.textContent = 'Scan QR di atas dari WhatsApp HP.';
+        if (s) { s.textContent = 'Scan QR di atas dari WhatsApp HP.'; s.style.color = ''; }
       } else if (d.event === 'connected') {
         var s2 = document.getElementById('qr-status');
         if (s2) s2.textContent = '✓ Terhubung! Menutup...';

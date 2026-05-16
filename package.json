@@ -41,6 +41,7 @@
     "pdf-parse": "^1.1.1",
     "pdfkit": "^0.18.0",
     "pizzip": "^3.2.0",
+    "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "xlsx": "^0.18.5"
   },

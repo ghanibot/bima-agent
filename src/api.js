@@ -427,10 +427,13 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // GET /api/wa/qr  — SSE stream of QR events
+  // GET /api/wa/qr  — SSE stream of QR events (server renders to data-URI PNG)
   if (route === '/api/wa/qr' && method === 'GET') {
     if (!_waHas('subscribeQR')) { _waUnavailable(res, 'subscribeQR'); return; }
     const wa = _wa();
+    let qrcodeLib;
+    try { qrcodeLib = require('qrcode'); } catch { qrcodeLib = null; }
+
     res.writeHead(200, {
       'Content-Type':    'text/event-stream',
       'Cache-Control':   'no-cache',
@@ -440,23 +443,35 @@ async function handleRequest(req, res) {
     });
     const write = (obj) => { try { res.write('data: ' + JSON.stringify(obj) + '\n\n'); } catch {} };
 
+    async function emitQR(qrText) {
+      if (!qrcodeLib) { write({ qr: qrText }); return; } // fallback: raw QR text
+      try {
+        const dataUrl = await qrcodeLib.toDataURL(qrText, { width: 300, margin: 2 });
+        write({ qr: qrText, dataUrl });
+      } catch (e) {
+        write({ qr: qrText, error: 'render: ' + e.message });
+      }
+    }
+
     // Replay current QR if fresh
     try {
       const cur = wa.getCurrentQR && wa.getCurrentQR();
-      if (cur) write({ qr: cur });
+      if (cur) emitQR(cur);
     } catch {}
 
     let closed = false;
     const unsubscribe = wa.subscribeQR((payload) => {
       if (closed) return;
       if (typeof payload === 'string') {
-        write({ qr: payload });
+        emitQR(payload);
       } else if (payload && payload.event === 'connected') {
         write({ event: 'connected' });
         cleanup();
         try { res.end(); } catch {}
       } else if (payload && payload.event === 'error') {
-        write({ event: 'error', msg: String(payload.payload || 'unknown') });
+        // Ignore residual "logged out" emitted right before reconnect
+        const msg = String(payload.payload || 'unknown');
+        if (msg !== 'logged out') write({ event: 'error', msg });
       }
     });
 
