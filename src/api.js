@@ -503,6 +503,87 @@ async function handleRequest(req, res) {
   }
 
   // ════════════════════════════════════════════════════════════
+  // Telegram control
+  // ════════════════════════════════════════════════════════════
+  const _tg = () => { try { return require('./telegram'); } catch { return null; } };
+  const _tgUnavailable = () => send(res, 503, { error: 'Modul Telegram tidak tersedia.' });
+
+  // GET /api/tg/token (returns sanitized tail)
+  if (route === '/api/tg/token' && method === 'GET') {
+    try {
+      const { getConfig } = require('./config');
+      const cfg = getConfig(_tenantId()) || {};
+      const tk  = cfg.telegramToken || '';
+      const tail = tk ? (tk.slice(0, 6) + '...' + tk.slice(-4) + ' (len=' + tk.length + ')') : '';
+      send(res, 200, { ok: true, token: tail });
+    } catch (e) { send(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // PUT /api/tg/token
+  if (route === '/api/tg/token' && method === 'PUT') {
+    try {
+      const body = await readBody(req);
+      const token = String(body.token || '').trim();
+      if (!token) { send(res, 400, { error: 'Token kosong' }); return; }
+      if (!/^\d+:[A-Za-z0-9_-]{20,}$/.test(token)) { send(res, 400, { error: 'Format token tidak valid (harus seperti 12345:AB...)' }); return; }
+      const { getConfig, saveConfig } = require('./config');
+      const cfg = getConfig(_tenantId()) || {};
+      cfg.telegramToken = token;
+      saveConfig(cfg, _tenantId());
+      pushActivity('TG', 'Token tersimpan');
+      send(res, 200, { ok: true });
+    } catch (e) { send(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // GET /api/tg/status
+  if (route === '/api/tg/status' && method === 'GET') {
+    const tg = _tg();
+    if (!tg) return _tgUnavailable();
+    try {
+      const st = tg.getTelegramStatus() || {};
+      send(res, 200, { ok: true, running: !!st.running, username: st.username || null });
+    } catch (e) { send(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // POST /api/tg/start
+  if (route === '/api/tg/start' && method === 'POST') {
+    const tg = _tg();
+    if (!tg) return _tgUnavailable();
+    try {
+      const { getConfig } = require('./config');
+      const cfg = getConfig(_tenantId()) || {};
+      if (!cfg.telegramToken) { send(res, 400, { error: 'Token belum diset. Simpan token dulu.' }); return; }
+      const log = (tag, text) => pushActivity('TG', String(text || tag));
+      await tg.startTelegram(cfg.telegramToken, log);
+      const st = tg.getTelegramStatus() || {};
+      pushActivity('TG', 'Bot aktif' + (st.username ? ' (@' + st.username + ')' : ''));
+      send(res, 200, { ok: true, username: st.username || null });
+    } catch (e) {
+      pushActivity('ERROR', 'TG start: ' + e.message);
+      send(res, 500, { error: e.message });
+    }
+    return;
+  }
+
+  // POST /api/tg/stop
+  if (route === '/api/tg/stop' && method === 'POST') {
+    const tg = _tg();
+    if (!tg) return _tgUnavailable();
+    try {
+      await tg.stopTelegram();
+      pushActivity('TG', 'Bot dihentikan');
+      send(res, 200, { ok: true });
+    } catch (e) {
+      pushActivity('ERROR', 'TG stop: ' + e.message);
+      send(res, 500, { error: e.message });
+    }
+    return;
+  }
+
+  // ════════════════════════════════════════════════════════════
   // Config
   // ════════════════════════════════════════════════════════════
   const _sanitizeKey = (k) => {
@@ -574,7 +655,14 @@ async function handleRequest(req, res) {
       let outputGroups = [];
       if (Array.isArray(cfg.outputGroups)) outputGroups = cfg.outputGroups.slice();
       else if (cfg.outputGroupJid) outputGroups = [cfg.outputGroupJid];
-      send(res, 200, { ok: true, inputGroups, outputGroups });
+      // Build groupNames map so UI can show friendly names even when WA disconnected
+      const groupNames = {};
+      if (cfg.inputGroups && typeof cfg.inputGroups === 'object' && !Array.isArray(cfg.inputGroups)) {
+        for (const [jid, name] of Object.entries(cfg.inputGroups)) groupNames[jid] = name;
+      }
+      if (cfg.outputGroupJid && cfg.outputGroupName) groupNames[cfg.outputGroupJid] = cfg.outputGroupName;
+      if (cfg.inputGroupName && cfg.inputGroup)      groupNames[cfg.inputGroup]      = cfg.inputGroupName;
+      send(res, 200, { ok: true, inputGroups, outputGroups, groupNames });
     } catch (e) { send(res, 500, { error: e.message }); }
     return;
   }

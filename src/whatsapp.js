@@ -66,9 +66,26 @@ function getJoinedGroups() {
   });
 }
 
-async function reconnectWA(logger) {
+async function reconnectWA(logger, opts = {}) {
   // Trigger a fresh connection attempt. If already connected, return immediately.
   if (state.connected) return { ok: true, already: true };
+
+  // Force-fresh: wipe stale auth files so Baileys generates a new QR.
+  // Triggered by /api/wa/connect — user explicitly wants to (re)connect.
+  if (opts.force !== false) {
+    try {
+      if (fs.existsSync(AUTH_DIR)) {
+        for (const f of fs.readdirSync(AUTH_DIR)) {
+          try { fs.rmSync(path.join(AUTH_DIR, f), { recursive: true, force: true }); } catch {}
+        }
+      }
+      // Tear down any half-open socket from previous attempt
+      try { if (sock) sock.end(); } catch {}
+      sock    = null;
+      started = false;
+    } catch {}
+  }
+
   await startWA(logger || (() => {}));
   return { ok: true, already: false };
 }

@@ -395,6 +395,23 @@ select[multiple] option{padding:4px 6px}
   </div>
 
   <div class="card">
+    <h2>Koneksi Telegram</h2>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <span id="tg-status-badge" class="status-badge red"><span class="dot"></span><span id="tg-status-text">Tidak aktif</span></span>
+      <button class="btn" id="tg-start-btn" onclick="startTelegram()">&#9654; Aktifkan Bot</button>
+      <button class="btn danger" id="tg-stop-btn" onclick="stopTelegram()" style="display:none">Stop Bot</button>
+    </div>
+    <label>Bot Token <span class="help-icon" title="Dapat dari @BotFather di Telegram">?</span></label>
+    <input type="password" id="tg-token" placeholder="123456:ABC-DEF... (dari @BotFather)">
+    <div id="tg-token-current" style="font-size:.72rem;color:#64748b;margin-top:4px">Token saat ini: -</div>
+    <button class="btn secondary" onclick="saveTelegramToken()" style="margin-top:8px">&#128190; Simpan Token</button>
+    <p style="font-size:.78rem;color:#94a3b8;margin-top:10px">
+      Dapatkan token dari <a href="https://t.me/BotFather" target="_blank" style="color:#22c55e">@BotFather</a>
+      &rarr; /newbot &rarr; ikuti instruksi. Setelah token disimpan, klik &quot;Aktifkan Bot&quot;.
+    </p>
+  </div>
+
+  <div class="card">
     <h2>AI Provider &amp; Model</h2>
     <label>Provider</label>
     <select id="cfg-provider">
@@ -1540,7 +1557,7 @@ async function testRunBuilder() {
 var _cachedGroups = [];
 
 async function loadSettings() {
-  // Status badge
+  // Status badge (WA + Telegram)
   try {
     var r = await fetch('/api/status', { headers: headers() });
     var d = await r.json();
@@ -1559,6 +1576,32 @@ async function loadSettings() {
       connectBtn.style.display = 'inline-block';
       disconnectBtn.style.display = 'none';
     }
+    // Telegram badge
+    var tgB = document.getElementById('tg-status-badge');
+    var tgT = document.getElementById('tg-status-text');
+    var tgStart = document.getElementById('tg-start-btn');
+    var tgStop  = document.getElementById('tg-stop-btn');
+    if (tgB && tgT) {
+      if (d.tgConnected) {
+        tgB.className = 'status-badge green';
+        tgT.textContent = d.tgUsername ? ('@' + d.tgUsername) : 'Aktif';
+        if (tgStart) tgStart.style.display = 'none';
+        if (tgStop)  tgStop.style.display  = 'inline-block';
+      } else {
+        tgB.className = 'status-badge red';
+        tgT.textContent = 'Tidak aktif';
+        if (tgStart) tgStart.style.display = 'inline-block';
+        if (tgStop)  tgStop.style.display  = 'none';
+      }
+    }
+  } catch(e) {}
+
+  // Telegram token display
+  try {
+    var rt = await fetch('/api/tg/token', { headers: headers() });
+    var dt = await rt.json();
+    var cur = document.getElementById('tg-token-current');
+    if (cur) cur.textContent = 'Token saat ini: ' + (dt.token || '(belum diset)');
   } catch(e) {}
 
   // Config
@@ -1611,16 +1654,21 @@ async function refreshWAGroups() {
       seen[g.jid] = true;
       var opt = document.createElement('option');
       opt.value = g.jid;
-      opt.textContent = g.name + '  (' + g.jid.split('@')[0] + ')';
+      opt.textContent = g.name || '(tanpa nama)';
+      opt.title       = g.jid; // hover shows JID for power users
       if (selected.indexOf(g.jid) !== -1) opt.selected = true;
       sel.appendChild(opt);
     });
+    // Look up names for already-selected JIDs not in WA list (use saved name in config if any)
+    var savedNames = (current && current.groupNames) || {};
     selected.forEach(function(jid) {
       if (!seen[jid]) {
         var opt = document.createElement('option');
         opt.value = jid;
-        opt.textContent = jid + '  (tidak ditemukan)';
-        opt.selected = true;
+        var nm = savedNames[jid] || '(grup belum di-load — connect WA dulu)';
+        opt.textContent = nm;
+        opt.title       = jid;
+        opt.selected    = true;
         sel.appendChild(opt);
       }
     });
@@ -1754,6 +1802,46 @@ async function disconnectWA() {
     var d = await r.json();
     if (r.ok) { alert('✓ Berhasil logout.'); loadSettings(); loadStatus(); }
     else alert('Gagal: ' + d.error);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+// ── Telegram ───────────────────────────────────────────────────
+async function saveTelegramToken() {
+  var token = document.getElementById('tg-token').value.trim();
+  if (!token) { alert('Masukkan token dulu.'); return; }
+  try {
+    var r = await fetch('/api/tg/token', { method:'PUT', headers: headers(), body: JSON.stringify({ token: token }) });
+    var d = await r.json();
+    if (r.ok) {
+      document.getElementById('tg-token').value = '';
+      loadSettings();
+      toast('✓ Token tersimpan');
+    } else alert('Gagal: ' + d.error);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function startTelegram() {
+  try {
+    var r = await fetch('/api/tg/start', { method:'POST', headers: headers() });
+    var d = await r.json();
+    if (r.ok) {
+      toast('✓ Bot Telegram aktif' + (d.username ? ' (@' + d.username + ')' : ''));
+      loadSettings();
+      loadStatus();
+    } else alert('Gagal: ' + d.error);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function stopTelegram() {
+  if (!confirm('Hentikan bot Telegram?')) return;
+  try {
+    var r = await fetch('/api/tg/stop', { method:'POST', headers: headers() });
+    var d = await r.json();
+    if (r.ok) {
+      toast('✓ Bot Telegram dihentikan');
+      loadSettings();
+      loadStatus();
+    } else alert('Gagal: ' + d.error);
   } catch(e) { alert('Error: ' + e.message); }
 }
 
