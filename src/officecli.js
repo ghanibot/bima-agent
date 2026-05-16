@@ -102,13 +102,20 @@ async function officeCommand(command, filesDir) {
     }
   }
 
-  // ── OfficeCLI manipulation ────────────────────────────────────
+  // ── Windows fallback: officecli binary doesn't support Windows ──
+  // OfficeCLI npm package declares "os": ["darwin","linux"] only.
+  // Use filemaker.js (pure JS) for create/edit on Windows.
+  if (process.platform === 'win32') {
+    return 'OfficeCLI binary tidak tersedia di Windows. Untuk buat/ubah file, pakai tool *create_file* atau *edit_file* (cross-platform).';
+  }
+
+  // ── OfficeCLI manipulation (Linux/Mac only) ────────────────
   try {
     const args   = parseCommandString(command);
     const result = await runOfficeCLI(args, filesDir);
     return result || 'Perintah berhasil dijalankan.';
   } catch (e) {
-    return `OfficeCLI error: ${e.message}`;
+    return `OfficeCLI error: ${e.message}. Coba pakai tool *create_file* atau *edit_file* sebagai gantinya.`;
   }
 }
 

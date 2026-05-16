@@ -43,8 +43,10 @@ TOOLS TERSEDIA:
 18. save_contact(name,phone)      - Simpan nomor telepon kontak baru
 19. list_contacts()               - Tampilkan semua kontak yang tersimpan
 20. delete_contact(name)          - Hapus kontak dari buku kontak
-21. edit_office(command)          - Manipulasi file Excel/Word/PowerPoint (buat, edit, baca)
-22. final_answer(text)            - Kirim jawaban akhir ke pengguna
+21. edit_office(command)          - Manipulasi file Excel/Word/PowerPoint via CLI (Linux/Mac saja)
+22. create_file(input)            - BUAT file baru (pdf/docx/xlsx/txt) dari konten teks. Input: JSON {"name":"namafile.pdf","content":"isi teks","title":"opsional"}
+23. edit_file(input)              - UBAH isi file yang sudah ada (otomatis backup .bak). Input: JSON {"name":"namafile.pdf","content":"isi baru","title":"opsional"}
+24. final_answer(text)            - Kirim jawaban akhir ke pengguna
 
 FORMAT RESPONS - balas HANYA JSON valid, tidak ada teks lain:
 {"thought":"pikirku singkat","action":"nama_tool","input":"parameter"}
@@ -70,6 +72,18 @@ ATURAN TOOL — PRIORITAS WAJIB:
 8. "Siapa yang tag/mention saya?" → get_my_mentions
 9. "Siapa ngobrol dengan siapa?" → get_conversation_patterns
 10. Percakapan biasa/math → langsung final_answer
+11. User minta BUAT/CIPTA file baru (pdf/docx/xlsx/txt) → create_file
+    Contoh perintah: "buatkan pdf X", "bikin docx Y", "tolong buat file Z"
+    JANGAN bilang "tidak bisa" — kamu PUNYA tool ini. Pakai konten yang user kasih.
+12. User minta UBAH/EDIT/REVISI file yang sudah ada → edit_file (otomatis backup)
+    Contoh: "ubah file X jadi Y", "update isi file Z", "revisi nominal di file W"
+    Wajib: list_files() DULU untuk pastikan file ada; pakai nama persis dari hasil itu.
+13. ANTI-HALUSINASI: JANGAN karang isi file. Jika user bilang "buatkan pdf nama Rahmat
+    uang jajan 7rb", pakai data yang user kasih PERSIS. Tidak boleh tambah angka/nama
+    yang tidak diinformasikan user. Kalau data kurang, TANYA dulu sebelum buat file.
+14. ANTI-OVERWRITE: Tool create_file otomatis auto-rename kalau nama sudah dipakai
+    (mis. catatan.pdf → catatan_1.pdf). Untuk update file yang sudah ada, WAJIB pakai
+    edit_file (bukan create_file dengan nama sama).
 
 ATURAN JAWABAN:
 - Setiap jawaban HARUS diakhiri dengan 1-2 saran atau langkah lanjutan yang relevan.
@@ -80,7 +94,7 @@ ATURAN JAWABAN:
 }
 
 // Search-type tools — trigger "sedang mencari" indicator
-const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket', 'get_my_mentions', 'get_conversation_patterns', 'lookup_contact', 'list_contacts', 'edit_office']);
+const SEARCH_TOOLS = new Set(['search_kb', 'web_search', 'browse_url', 'deep_research', 'get_price', 'compare_files', 'get_file', 'list_files', 'recall_memory', 'get_group_log', 'get_person_location', 'get_polymarket', 'get_my_mentions', 'get_conversation_patterns', 'lookup_contact', 'list_contacts', 'edit_office', 'create_file', 'edit_file']);
 
 // ── Main agent loop ───────────────────────────────────────────
 // onToolCall(action, input) — optional async callback before each tool executes
@@ -458,6 +472,77 @@ async function executeTool(action, input, tools, tenantId) {
       const filesDir = tenantPaths(tid).files;
       const result   = await officeCommand(String(input), filesDir);
       return result;
+    }
+
+    case 'create_file': {
+      const { createFile, findFile } = require('./filemaker');
+      const { tenantPaths }          = require('./tenant');
+      const filesDir = tenantPaths(tid).files;
+
+      let opts;
+      try {
+        opts = typeof input === 'string' ? JSON.parse(input) : input;
+      } catch {
+        return 'Error: input harus JSON. Contoh: {"name":"catatan.pdf","content":"isi","title":"judul"}';
+      }
+      if (!opts || !opts.name) return 'Error: field "name" wajib (nama file dengan ekstensi, mis. "uang_jajan.pdf").';
+      if (opts.content === undefined || opts.content === null) {
+        return 'Error: field "content" wajib (isi file).';
+      }
+
+      try {
+        const target = await createFile(opts.name, opts.content, filesDir, {
+          title:     opts.title,
+          sheetName: opts.sheetName,
+          // overwrite defaults to false — anti-overwrite is the default
+          overwrite: opts.overwrite === true,
+        });
+        const finalName = require('path').basename(target);
+        const renamed = finalName !== opts.name && !opts.overwrite;
+        return renamed
+          ? `✓ File berhasil dibuat sebagai *${finalName}* (nama "${opts.name}" sudah dipakai sebelumnya — auto-rename).`
+          : `✓ File *${finalName}* berhasil dibuat di knowledge base.`;
+      } catch (e) {
+        return `Gagal buat file: ${e.message}`;
+      }
+    }
+
+    case 'edit_file': {
+      const { editFile, findFile, listFiles } = require('./filemaker');
+      const { tenantPaths }                   = require('./tenant');
+      const filesDir = tenantPaths(tid).files;
+
+      let opts;
+      try {
+        opts = typeof input === 'string' ? JSON.parse(input) : input;
+      } catch {
+        return 'Error: input harus JSON. Contoh: {"name":"catatan.pdf","content":"isi baru"}';
+      }
+      if (!opts || !opts.name)    return 'Error: field "name" wajib.';
+      if (opts.content === undefined) return 'Error: field "content" wajib.';
+
+      // Resolve target — exact match first, then fuzzy
+      const fs   = require('fs');
+      const path = require('path');
+      let targetName = opts.name;
+      if (!fs.existsSync(path.join(filesDir, targetName))) {
+        const found = findFile(opts.name, filesDir);
+        if (!found) {
+          const available = listFiles(filesDir).map(f => f.name).slice(0, 10).join(', ');
+          return `File "${opts.name}" tidak ditemukan. File tersedia: ${available || '(kosong)'}`;
+        }
+        targetName = found.name;
+      }
+
+      try {
+        const result = await editFile(targetName, opts.content, filesDir, {
+          title:     opts.title,
+          sheetName: opts.sheetName,
+        });
+        return `✓ File *${targetName}* berhasil diupdate. Backup tersimpan: ${path.basename(result.backup)}`;
+      } catch (e) {
+        return `Gagal edit file: ${e.message}`;
+      }
     }
 
     default:
