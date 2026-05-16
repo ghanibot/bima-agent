@@ -7,9 +7,11 @@ let _botInfo = null;
 // ── Start Telegram bot ────────────────────────────────────────
 async function startTelegram(token, logger) {
   if (_bot) {
-    try { await _bot.stopPolling(); } catch {}
+    try { await _bot.stopPolling({ cancel: true, reason: 'restart' }); } catch {}
     _bot     = null;
     _botInfo = null;
+    // Telegram needs ~1.5s to release the polling slot
+    await new Promise(r => setTimeout(r, 1500));
   }
   _logFn = logger || _logFn;
 
@@ -19,6 +21,12 @@ async function startTelegram(token, logger) {
   } catch {
     throw new Error('node-telegram-bot-api belum terinstall. Jalankan: npm install node-telegram-bot-api');
   }
+
+  // Pre-clear any leftover update queue (kills foreign pollers' next poll)
+  try {
+    const probe = new TelegramBot(token, { polling: false });
+    await probe.getUpdates({ offset: -1, timeout: 0 }).catch(() => {});
+  } catch {}
 
   _bot = new TelegramBot(token, { polling: { interval: 1000, autoStart: true } });
 
@@ -31,8 +39,23 @@ async function startTelegram(token, logger) {
     }
   });
 
-  _bot.on('polling_error', (err) => {
-    _logFn('WARN', `TG polling: ${err.message}`);
+  // Auto-recover from 409 Conflict — another poller stole the slot.
+  // We pause polling briefly so the foreign instance times out, then resume.
+  let _409Cooldown = 0;
+  _bot.on('polling_error', async (err) => {
+    const msg = String(err && err.message || err);
+    if (/409 Conflict|terminated by other getUpdates/i.test(msg)) {
+      const now = Date.now();
+      if (now - _409Cooldown < 30_000) return; // throttle to once per 30s
+      _409Cooldown = now;
+      _logFn('WARN', 'TG 409: instance lain polling. Pause 15s lalu resume...');
+      try { await _bot.stopPolling({ cancel: true, reason: '409' }); } catch {}
+      await new Promise(r => setTimeout(r, 15_000));
+      try { await _bot.startPolling({ restart: true }); _logFn('TG', 'Polling resumed'); }
+      catch (e) { _logFn('ERROR', 'TG resume gagal: ' + e.message); }
+    } else {
+      _logFn('WARN', `TG polling: ${msg}`);
+    }
   });
 }
 

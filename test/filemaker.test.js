@@ -138,7 +138,7 @@ test('findFile does fuzzy (case-insensitive substring) match', async () => {
   assert.equal(f2.name, 'Notes.txt');
 
   const f3 = fm.findFile('nonexistent', dir);
-  assert.equal(f3, undefined);
+  assert.ok(!f3, 'should not find anything');
 });
 
 // ──────────────────────────────────────────────────────────────

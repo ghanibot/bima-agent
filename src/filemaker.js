@@ -294,11 +294,87 @@ function listFiles(filesDir) {
     .filter(f => f.isFile);
 }
 
-// ── Find existing file by partial name (case-insensitive) ────
+// ── Find existing file by partial name (token-based fuzzy) ───
+// Examples that should all match "daftar_uangjajan_rahmat.pdf":
+//   "uang jajan rahmat"
+//   "daftar rahmat"
+//   "rahmat uang jajan"
+//   "uangjajan"
+//   "rahmat.pdf"
+// Strategy:
+//   1. Tokenize the query into lowercase words (strip ext + punctuation).
+//   2. Score each candidate file by: exact substring + token coverage +
+//      recency tiebreaker.
+//   3. Return the highest-scoring file if it covers >=50% of query tokens.
 function findFile(query, filesDir) {
   const files = listFiles(filesDir);
-  const q = String(query || '').toLowerCase();
-  return files.find(f => f.name.toLowerCase().includes(q));
+  if (!files.length) return null;
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return null;
+
+  // Strict full-substring shortcut
+  const direct = files.find(f => f.name.toLowerCase().includes(q));
+  if (direct) return direct;
+
+  // Tokenize query
+  const stop = new Set(['file', 'pdf', 'docx', 'xlsx', 'doc', 'xls', 'txt', 'di', 'dan', 'untuk', 'yang']);
+  const qTokens = q
+    .replace(/[._\-,\/\\]+/g, ' ')
+    .split(/\s+/)
+    .filter(t => t.length >= 2 && !stop.has(t));
+  if (!qTokens.length) return null;
+
+  let best = null, bestScore = 0;
+  for (const f of files) {
+    // Strip timestamp prefix + extension before scoring
+    const clean = f.name
+      .replace(/^\d{10,}_/, '')
+      .replace(/\.[a-z0-9]+$/i, '')
+      .replace(/[._\-,\/\\]+/g, ' ')
+      .toLowerCase();
+    const candidateTokens = new Set(clean.split(/\s+/).filter(Boolean));
+    let hits = 0;
+    for (const qt of qTokens) {
+      for (const ct of candidateTokens) {
+        if (ct === qt || ct.includes(qt) || qt.includes(ct)) { hits++; break; }
+      }
+    }
+    const coverage = hits / qTokens.length;
+    // Recency bonus (newer wins ties): up to +0.1 based on mtime
+    const mtimeBonus = Math.min(0.1, (Date.now() - f.mtime.getTime() > 0)
+      ? 0.1 / (1 + (Date.now() - f.mtime.getTime()) / (1000 * 60 * 60 * 24 * 30))
+      : 0);
+    const score = coverage + mtimeBonus;
+    if (score > bestScore) { bestScore = score; best = f; }
+  }
+
+  // Require at least 50% token coverage to count as a match
+  return bestScore >= 0.5 ? best : null;
+}
+
+// Find top-N candidates (for AI to choose from when fuzzy match is ambiguous)
+function findFileCandidates(query, filesDir, limit = 5) {
+  const files = listFiles(filesDir);
+  if (!files.length) return [];
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return [];
+  const stop = new Set(['file', 'pdf', 'docx', 'xlsx', 'doc', 'xls', 'txt', 'di', 'dan', 'untuk', 'yang']);
+  const qTokens = q.replace(/[._\-,\/\\]+/g, ' ').split(/\s+/).filter(t => t.length >= 2 && !stop.has(t));
+  if (!qTokens.length) return [];
+
+  const scored = files.map(f => {
+    const clean = f.name.replace(/^\d{10,}_/, '').replace(/\.[a-z0-9]+$/i, '')
+      .replace(/[._\-,\/\\]+/g, ' ').toLowerCase();
+    const candidateTokens = new Set(clean.split(/\s+/).filter(Boolean));
+    let hits = 0;
+    for (const qt of qTokens) {
+      for (const ct of candidateTokens) {
+        if (ct === qt || ct.includes(qt) || qt.includes(ct)) { hits++; break; }
+      }
+    }
+    return { file: f, score: hits / qTokens.length };
+  }).filter(s => s.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
+  return scored.map(s => ({ name: s.file.name, score: Number(s.score.toFixed(2)), mtime: s.file.mtime }));
 }
 
 module.exports = {
@@ -311,5 +387,6 @@ module.exports = {
   fillTemplate,
   listFiles,
   findFile,
+  findFileCandidates,
   safeName,
 };

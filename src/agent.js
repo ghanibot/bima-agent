@@ -96,13 +96,23 @@ ATURAN TOOL — PRIORITAS WAJIB:
     (mis. catatan.pdf → catatan_1.pdf). Untuk update file yang sudah ada, WAJIB pakai
     edit_file (bukan create_file dengan nama sama).
 16. User minta KIRIM file (PDF/docx/dll) ke WhatsApp → send_file
-    Contoh: "kirim file laporan.pdf ke grup", "tolong kirim daftar_uangjajan.pdf"
-    - Default mode="raw" (kirim file asli/utuh).
-    - mode="compact" untuk kirim versi ringkas (hanya jika user minta "ringkasan" /
-      "compact" / "summary" dan file sudah pernah di-compact via /compact CLI).
-    - Wajib: list_files() DULU untuk pastikan file ada (nama-prefix timestamp seperti
-      "1778221637723_X.pdf" akan dibersihkan otomatis saat dikirim).
-    - jid: kalau user di grup, otomatis pakai grup itu. Kalau user di DM, otomatis pakai DM.
+    Contoh user (semua harus jalan, tidak perlu nama persis):
+       "kirim file uang jajan rahmat"           → cari file fuzzy
+       "tolong kirim laporan kemarin"           → list_files() + pilih yg paling baru
+       "kirim file yang barusan kita bikin"     → recall_memory + send_file
+       "kirim aja file rahmat"                  → fuzzy match
+    Aturan main:
+    - Tool send_file SUDAH punya fuzzy matching token-based (cocok "uang jajan rahmat"
+      dengan "daftar_uangjajan_rahmat.pdf"). LANGSUNG panggil dengan name=apa yang
+      user katakan — JANGAN minta nama persis ke user dulu.
+    - Kalau send_file return error "tidak ditemukan", BARU panggil list_files()
+      untuk lihat daftar lengkap, lalu pilih yang paling cocok berdasarkan konteks
+      (recall_memory bisa bantu cari file yang baru dibuat/disebut dalam percakapan).
+    - Kalau user merujuk file dengan kata "barusan", "tadi", "kemarin", "yang itu",
+      WAJIB panggil recall_memory atau memory.read DULU untuk cari nama persisnya
+      dari percakapan, baru send_file.
+    - mode="compact" hanya kalau user eksplisit minta "ringkasan/summary/compact".
+    - jid: default = chat yang sedang berjalan. JANGAN tanya tujuan kalau user di grup.
 
 ATURAN JAWABAN:
 - Setiap jawaban HARUS diakhiri dengan 1-2 saran atau langkah lanjutan yang relevan.
@@ -708,11 +718,18 @@ async function executeTool(action, input, tools, tenantId) {
         buffer = fs.readFileSync(opts.name);
         fileName = path.basename(opts.name);
       } else {
-        const { findFile } = require('./filemaker');
+        const { findFile, findFileCandidates } = require('./filemaker');
         let direct = path.join(filesDir, fileName);
         if (!fs.existsSync(direct)) {
           const f = findFile(opts.name, filesDir);
-          if (!f) return `File "${opts.name}" tidak ditemukan di knowledge base. Coba list_files() untuk lihat nama persisnya.`;
+          if (!f) {
+            const candidates = findFileCandidates(opts.name, filesDir, 5);
+            if (candidates.length) {
+              const list = candidates.map((c, i) => `${i + 1}. ${c.name.replace(/^\d{10,}_/, '')}`).join('\n');
+              return `File "${opts.name}" tidak cocok jelas. Mirip dengan:\n${list}\n\nMau yang mana? Sebutkan nomor atau nama yang lebih spesifik.`;
+            }
+            return `File "${opts.name}" tidak ditemukan di knowledge base. Panggil list_files() untuk lihat semua nama.`;
+          }
           direct = path.join(filesDir, f.name);
           fileName = f.name;
         }
