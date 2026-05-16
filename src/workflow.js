@@ -72,6 +72,8 @@ const _DEFAULT_TIMEOUT_MS = {
   'wa.send_media': 60000,  // media upload can be slow
   'wa.transcribe': 120000, // STT can be slow on long audio
   'wa.vision':     90000,  // vision AI
+  'file.create':   30000,
+  'file.edit':     30000,
   'loop':          300000,
   'repeat':        300000,
   'parallel':      180000,
@@ -407,6 +409,66 @@ const NODE_EXECUTORS = {
 
     const output = typeof result === 'object' ? JSON.stringify(result) : String(result ?? '');
     return { ok: true, output: output.slice(0, 4000) };
+  },
+
+  // ── File create/edit nodes (cross-platform) ──────────────
+  // file.create — create new file (pdf/docx/xlsx/txt) from text content
+  // config: { name, content, title?, sheetName?, overwrite? }
+  //   - content can reference {{lastOutput}}, {{message}}, etc.
+  //   - overwrite=false by default (auto-renames duplicates)
+  'file.create': async (node, ctx) => {
+    const { createFile } = require('./filemaker');
+    const { tenantPaths } = require('./tenant');
+    const filesDir = tenantPaths(ctx._tenantId || 'default').files;
+
+    const name    = resolveVars(node.config?.name || '', ctx);
+    const content = resolveVars(String(node.config?.content ?? ctx.lastOutput ?? ''), ctx);
+    const title   = node.config?.title ? resolveVars(node.config.title, ctx) : undefined;
+
+    if (!name) return { ok: false, error: 'config.name kosong (mis. "catatan.pdf")' };
+
+    try {
+      const target = await createFile(name, content, filesDir, {
+        title,
+        sheetName: node.config?.sheetName,
+        overwrite: node.config?.overwrite === true,
+      });
+      const path = require('path');
+      return { ok: true, output: path.basename(target) };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  },
+
+  // file.edit — modify existing file (auto-backup .bak before overwrite)
+  // config: { name, content, title?, sheetName? }
+  'file.edit': async (node, ctx) => {
+    const { editFile, findFile } = require('./filemaker');
+    const { tenantPaths }        = require('./tenant');
+    const filesDir = tenantPaths(ctx._tenantId || 'default').files;
+
+    const name    = resolveVars(node.config?.name || '', ctx);
+    const content = resolveVars(String(node.config?.content ?? ctx.lastOutput ?? ''), ctx);
+    const title   = node.config?.title ? resolveVars(node.config.title, ctx) : undefined;
+
+    if (!name) return { ok: false, error: 'config.name kosong' };
+
+    // Resolve exact or fuzzy match
+    const fs   = require('fs');
+    const path = require('path');
+    let targetName = name;
+    if (!fs.existsSync(path.join(filesDir, targetName))) {
+      const found = findFile(name, filesDir);
+      if (!found) return { ok: false, error: `File "${name}" tidak ditemukan di knowledge base` };
+      targetName = found.name;
+    }
+
+    try {
+      const result = await editFile(targetName, content, filesDir, { title, sheetName: node.config?.sheetName });
+      return { ok: true, output: `${targetName} (backup: ${path.basename(result.backup)})` };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   },
 
   // ── WA media nodes ───────────────────────────────────────

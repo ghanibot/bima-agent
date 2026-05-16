@@ -238,6 +238,48 @@ const TEMPLATES = [
   },
 
   {
+    id:          'voice_to_pdf_note',
+    name:        'Voice Note → PDF Catatan',
+    description: 'Transkripsi voice note, ringkas, simpan jadi PDF di knowledge base',
+    tags:        ['wa.message', 'audio', 'ai', 'pdf'],
+    build: () => ({
+      trigger: { type: 'wa.message', onMedia: 'audio', mediaOnly: true, exclusive: true },
+      entry:   'transcribe',
+      nodes: [
+        {
+          id: 'transcribe', type: 'wa.transcribe',
+          config: { source: 'trigger' },
+          retry: { times: 1, backoff: 'fixed', delayMs: 1500 },
+          next: 'summarize',
+        },
+        {
+          id: 'summarize', type: 'ai.call',
+          config: {
+            prompt: 'Rapikan transkripsi voice note ini jadi catatan yang ringkas dan rapi (bullet points jika perlu):\n\n{{lastOutput}}',
+            system: 'Kamu asisten yang merapikan transkripsi audio jadi catatan rapi.',
+          },
+          retry: { times: 1, backoff: 'exponential', delayMs: 1000 },
+          next: 'save',
+        },
+        {
+          id: 'save', type: 'file.create',
+          config: {
+            name:    'catatan_voice_{{loop_index}}.pdf',
+            content: '{{lastOutput}}',
+            title:   'Catatan dari Voice Note',
+          },
+          next: 'notify',
+        },
+        {
+          id: 'notify', type: 'wa.send',
+          config: { text: '✓ Voice note tersimpan jadi PDF: *{{lastOutput}}*\n\nLihat di knowledge base.' },
+          next: null,
+        },
+      ],
+    }),
+  },
+
+  {
     id:          'image_to_description',
     name:        'Foto → Deskripsi AI',
     description: 'User kirim foto, AI deskripsikan/jawab pertanyaan tentang isi gambar',

@@ -75,6 +75,24 @@ wa.send_media — kirim gambar/audio/video/dokumen
     mimetype?: string      // document only, default application/octet-stream
   }
 
+file.create   — BUAT file baru di knowledge base (pdf/docx/xlsx/txt)
+  config: {
+    name: string,          // contoh: "laporan_harian.pdf" (ekstensi wajib)
+    content: string,       // isi (boleh pakai {{lastOutput}}, {{message}}, dll)
+    title?: string,        // judul halaman/dokumen
+    sheetName?: string,    // xlsx saja
+    overwrite?: boolean    // default false — auto-rename kalau nama dipakai
+  }
+
+file.edit     — UBAH file existing (auto-backup .bak dgn timestamp)
+  config: {
+    name: string,          // nama file yang sudah ada
+    content: string,       // isi baru (boleh pakai template var)
+    title?: string,
+    sheetName?: string
+  }
+  // Output: nama file + nama backup yg dibuat
+
 transform     — transformasi nilai dengan ekspresi JS, input = lastOutput
   config: { expr: string, inputVar?: string }
 
@@ -235,6 +253,7 @@ function validateWorkflow(wf) {
     'delay', 'memory.read', 'memory.write', 'set', 'log',
     'loop', 'repeat', 'parallel', 'workflow.run',
     'wa.transcribe', 'wa.vision', 'wa.send_media',
+    'file.create', 'file.edit',
   ]);
 
   for (const node of wf.nodes) {

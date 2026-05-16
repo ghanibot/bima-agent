@@ -674,6 +674,8 @@ async function cmdWorkflow(args) {
       { label: 'wa.send_media', desc: 'Kirim gambar/audio/video/dokumen' },
       { label: 'wa.transcribe', desc: 'Voice note → teks (STT)' },
       { label: 'wa.vision',     desc: 'Gambar → jawaban AI (vision/OCR)' },
+      { label: 'file.create',   desc: 'Buat file pdf/docx/xlsx/txt baru di KB' },
+      { label: 'file.edit',     desc: 'Ubah isi file existing (auto-backup .bak)' },
       { label: 'ai.call',       desc: 'Panggil AI dengan prompt' },
       { label: 'http.request',  desc: 'HTTP GET/POST ke URL eksternal' },
       { label: 'shell',         desc: 'Jalankan perintah OS (butuh sandbox on)' },
@@ -750,6 +752,16 @@ async function cmdWorkflow(args) {
         else node.config.source = await ask(' URL atau path gambar: ');
         const q = (await ask(' Pertanyaan ke AI (kosong = "Jelaskan isi gambar"): ')).trim();
         if (q) node.config.question = q;
+      } else if (nodeType === 'file.create') {
+        node.config.name    = await ask(' Nama file (dengan ekstensi, mis. laporan.pdf): ');
+        node.config.content = await ask(' Isi (boleh pakai {{lastOutput}}, {{message}}): ');
+        const title         = (await ask(' Judul (opsional): ')).trim();
+        if (title) node.config.title = title;
+      } else if (nodeType === 'file.edit') {
+        node.config.name    = await ask(' Nama file existing (mis. laporan.pdf): ');
+        node.config.content = await ask(' Isi baru (boleh pakai {{lastOutput}}): ');
+        const title         = (await ask(' Judul (opsional): ')).trim();
+        if (title) node.config.title = title;
       } else if (nodeType === 'ai.call') {
         node.config.prompt = await ask(' Prompt (gunakan {{message}} untuk teks WA): ');
         node.config.system = (await ask(' System prompt (kosong = default Bima): ')).trim() || undefined;
@@ -821,6 +833,7 @@ async function cmdWorkflow(args) {
       const FRAGILE_TYPES = new Set([
         'http.request', 'ai.call', 'shell', 'workflow.run',
         'wa.transcribe', 'wa.vision', 'wa.send_media',
+        'file.create', 'file.edit',
       ]);
       if (FRAGILE_TYPES.has(nodeType)) {
         const advIdx = await ui.selectMenu('Konfigurasi retry/timeout? (opsional)', [

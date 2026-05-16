@@ -23,6 +23,8 @@ const NODE_STYLE = {
   'wa.read_group':  { icon: '📖', color: C.cyan },
   'wa.transcribe':  { icon: '🎙 ', color: C.magenta },
   'wa.vision':      { icon: '👁 ', color: C.magenta },
+  'file.create':    { icon: '📄', color: C.green },
+  'file.edit':      { icon: '✏ ', color: C.orange },
   'ai.call':        { icon: '🤖', color: C.magenta },
   'http.request':   { icon: '🌐', color: C.blue },
   'shell':          { icon: '💻', color: C.orange },
@@ -76,6 +78,8 @@ function configSummary(node) {
     case 'wa.transcribe': return `source: ${cfg.source || 'trigger'}`;
     case 'wa.vision':     return `source: ${cfg.source || 'trigger'}${cfg.question ? ` Q:"${clip(cfg.question, 25)}"` : ''}`;
     case 'wa.send_media': return `${cfg.type || '?'} ${clip(cfg.source, 30)}${cfg.caption ? ` cap:"${clip(cfg.caption, 20)}"` : ''}`;
+    case 'file.create':   return `${cfg.name || '?'}${cfg.title ? ` "${clip(cfg.title, 20)}"` : ''}`;
+    case 'file.edit':     return `${cfg.name || '?'} (backup .bak)`;
     default: return '';
   }
 }

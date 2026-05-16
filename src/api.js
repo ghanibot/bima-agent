@@ -756,6 +756,8 @@ var NODE_DEFS = {
   'wa.transcribe': { icon: '\u{1F399}', label: 'Transcribe',    group: 'WhatsApp', fields: ['source'] },
   'wa.vision':     { icon: '\u{1F441}', label: 'Vision',        group: 'WhatsApp', fields: ['source', 'question'] },
   'wa.read_group': { icon: '\u{1F4D6}', label: 'Read Group',    group: 'WhatsApp', fields: ['jid', 'limit'] },
+  'file.create':   { icon: '\u{1F4C4}', label: 'Create File',   group: 'File',     fields: ['name', 'content', 'title'] },
+  'file.edit':     { icon: '✏',    label: 'Edit File',     group: 'File',     fields: ['name', 'content', 'title'] },
   'ai.call':       { icon: '\u{1F916}', label: 'AI Call',       group: 'AI',       fields: ['prompt', 'system'] },
   'http.request':  { icon: '\u{1F310}', label: 'HTTP',          group: 'Data',     fields: ['url', 'method', 'body', 'extract'] },
   'shell':         { icon: '\u{1F4BB}', label: 'Shell',         group: 'Data',     fields: ['cmd'] },
@@ -876,6 +878,7 @@ function nodeSummary(n) {
   if (n.type === 'wa.send_to') return (c.jid||'?').split('@')[0] + ': "' + (c.text||'').slice(0,20) + '"';
   if (n.type === 'wa.send_media') return (c.type||'?') + ' ' + (c.source||'').slice(0,25);
   if (n.type === 'wa.transcribe' || n.type === 'wa.vision') return 'source: ' + (c.source||'trigger');
+  if (n.type === 'file.create' || n.type === 'file.edit') return (c.name||'?');
   if (n.type === 'ai.call') return (c.prompt||'').slice(0,30);
   if (n.type === 'http.request') return (c.method||'GET') + ' ' + (c.url||'').slice(0,25);
   if (n.type === 'shell') return '$ ' + (c.cmd||'').slice(0,25);
