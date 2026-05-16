@@ -1695,44 +1695,51 @@ function cmdProfiles(args) {
 //  /tts — configure Text-to-Speech voice
 // ══════════════════════════════════════════════════════════════
 function cmdTTS(args) {
-  const { setVoice, getConfig: getTTSConfig, VOICE_LIST } = require('./tts');
+  const { setVoice, setProvider, getConfig: getTTSConfig, VOICE_LIST } = require('./tts');
   const sub = args[0];
 
   if (!sub || sub === 'status') {
     const cfg = getTTSConfig();
     let out = 'TTS — Text-to-Speech\n' + '─'.repeat(40) + '\n';
-    out += `  Voice aktif : ${cfg.voice}\n\n`;
-    out += '  Suara tersedia:\n';
-    VOICE_LIST.forEach(v => {
-      const mark = v.name === cfg.voice ? ' ← aktif' : '';
-      out += `    ${v.alias.padEnd(8)} ${v.name} (${v.gender})${mark}\n`;
-    });
-    out += '\n  Ubah suara: /tts voice <alias|nama>\n';
-    out += '  Contoh: /tts voice gadis\n';
+    out += `  Provider    : ${cfg.provider || 'google'}\n`;
+    out += `  Voice aktif : ${cfg.voiceStyle || cfg.voice || 'M1'}\n`;
+    out += `  Bahasa      : ${cfg.lang || 'id'}\n\n`;
+    out += '  Suara tersedia (Supertonic): M1-M5 (male), F1-F5 (female)\n';
+    out += '  Provider tersedia: google (online) | supertonic (on-device)\n\n';
+    out += '  Ubah provider : /tts provider <google|supertonic>\n';
+    out += '  Ubah suara    : /tts voice <M1|F1|...>\n';
     out += '─'.repeat(40);
     println(out);
     return;
   }
 
+  if (sub === 'provider') {
+    const input = args[1];
+    if (!input) { println('Contoh: /tts provider supertonic'); return; }
+    const resolved = setProvider(input);
+    println(`✓ TTS provider: ${resolved}`);
+    return;
+  }
+
   if (sub === 'voice' || sub === 'set') {
     const input = args[1];
-    if (!input) { println('Contoh: /tts voice ardi\n        /tts voice gadis'); return; }
+    if (!input) { println('Contoh: /tts voice M1\n        /tts voice F2'); return; }
     const resolved = setVoice(input);
     println(`✓ Suara TTS diset ke: ${resolved}`);
     return;
   }
 
   if (sub === 'list') {
-    let out = 'TTS — Daftar Suara Indonesia\n' + '─'.repeat(40) + '\n';
-    VOICE_LIST.forEach(v => {
-      out += `  ${v.alias.padEnd(8)} ${v.name}  (${v.gender})\n`;
+    let out = 'TTS — Suara Supertonic\n' + '─'.repeat(40) + '\n';
+    ['M1','M2','M3','M4','M5','F1','F2','F3','F4','F5'].forEach(v => {
+      out += `  ${v.padEnd(6)} ${v.startsWith('M') ? 'Male' : 'Female'} voice\n`;
     });
     out += '─'.repeat(40);
     println(out);
     return;
   }
 
-  println('Subcommand: status | voice <alias> | list\nContoh: /tts voice gadis');
+  println('Subcommand: status | provider <name> | voice <M1|F1|...> | list');
 }
 
 // ══════════════════════════════════════════════════════════════

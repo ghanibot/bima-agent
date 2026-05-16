@@ -35,10 +35,18 @@ function _save(cfg) {
 let _cfg = loadConfig();
 
 function setVoice(input) {
-  const v = input.toLowerCase().trim();
-  if (v === 'slow')   { _cfg.slow = true;  _save(_cfg); return 'Indonesia (lambat)'; }
-  if (v === 'normal') { _cfg.slow = false; _save(_cfg); return 'Indonesia (normal)'; }
-  return `Pilihan: slow | normal`;
+  const v = String(input || '').trim().toUpperCase();
+  // Supertonic voice styles
+  if (/^[MF][1-5]$/.test(v)) {
+    _cfg.voiceStyle = v;
+    _save(_cfg);
+    return `Supertonic ${v} (${v.startsWith('M') ? 'male' : 'female'})`;
+  }
+  // Legacy google modes
+  const lower = v.toLowerCase();
+  if (lower === 'slow')   { _cfg.slow = true;  _save(_cfg); return 'Indonesia (lambat)'; }
+  if (lower === 'normal') { _cfg.slow = false; _save(_cfg); return 'Indonesia (normal)'; }
+  return `Pilihan: M1-M5 | F1-F5 (Supertonic) | slow | normal (Google)`;
 }
 
 function getConfig() { return { ..._cfg, VOICE_LIST }; }
@@ -145,42 +153,64 @@ async function mp3ToOgg(mp3Buffer) {
 // We shell out to the local example_onnx.js to avoid bundling its heavy deps
 // inside Bima. Outputs WAV → we convert to OGG Opus via ffmpeg.
 async function synthesizeSupertonic(text) {
-  const supertonicDir = path.join(
+  const supertonicRoot = path.join(
     process.env.BIMA_DATA || path.join(os.homedir(), '.bima'),
-    'supertonic', 'nodejs'
+    'supertonic'
   );
-  const entry = path.join(supertonicDir, 'example_onnx.js');
+  const nodeJsDir = path.join(supertonicRoot, 'nodejs');
+  const entry     = path.join(nodeJsDir, 'example_onnx.js');
+  const onnxDir   = path.join(supertonicRoot, 'assets', 'onnx');
+  const voicesDir = path.join(supertonicRoot, 'assets', 'voice_styles');
 
   if (!fs.existsSync(entry)) {
     throw new Error(
       'Supertonic belum terinstall. Setup:\n' +
-      '  1) cd ' + path.dirname(supertonicDir) + '\n' +
-      '  2) git clone https://github.com/supertone-inc/supertonic .\n' +
-      '  3) cd nodejs && npm install\n' +
-      'Atau pindah ke provider lain di tts.json (provider: "google").'
+      '  1) cd ' + supertonicRoot + '/..\n' +
+      '  2) git clone https://github.com/supertone-inc/supertonic\n' +
+      '  3) cd supertonic/nodejs && npm install\n' +
+      'Pakai provider lain di tts.json (provider: "google").'
+    );
+  }
+  if (!fs.existsSync(onnxDir)) {
+    throw new Error(
+      'Model Supertonic belum di-download. Run:\n' +
+      '  node scripts/download-supertonic.js'
     );
   }
 
-  const lang = _cfg.lang || 'id';
-  const voice = _cfg.voiceStyle || 'M1'; // default voice style
-  const tmpDir = os.tmpdir();
-  const wavPath = path.join(tmpDir, `bima_st_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`);
+  const lang  = _cfg.lang || 'id';
+  const voice = _cfg.voiceStyle || 'M1';
+  const voiceJson = path.join(voicesDir, voice + '.json');
+  if (!fs.existsSync(voiceJson)) {
+    throw new Error(`Voice style "${voice}.json" tidak ada di ${voicesDir}. Pilih: M1-M5 atau F1-F5.`);
+  }
+
+  // Per-run save dir (Supertonic writes its own filename inside).
+  const tmpSaveDir = path.join(os.tmpdir(), `bima_st_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  fs.mkdirSync(tmpSaveDir, { recursive: true });
 
   await new Promise((resolve, reject) => {
     execFile('node', [entry,
       '--text', text,
       '--lang', lang,
-      '--voice-style', voice,
-      '--output', wavPath,
-    ], { cwd: supertonicDir, timeout: 60000 }, (err, _stdout, stderr) => {
-      if (err) reject(new Error('Supertonic: ' + (stderr?.slice(-200) || err.message)));
+      '--voice-style', voiceJson,
+      '--onnx-dir', onnxDir,
+      '--save-dir', tmpSaveDir,
+      '--n-test', '1',
+    ], { cwd: nodeJsDir, timeout: 120000 }, (err, _stdout, stderr) => {
+      if (err) reject(new Error('Supertonic: ' + (stderr?.slice(-300) || err.message)));
       else resolve();
     });
   });
 
-  if (!fs.existsSync(wavPath)) throw new Error('Supertonic tidak menghasilkan output WAV');
-  const wav = fs.readFileSync(wavPath);
-  try { fs.unlinkSync(wavPath); } catch {}
+  // Pick the first .wav file the example wrote
+  const wavs = fs.readdirSync(tmpSaveDir).filter(f => f.toLowerCase().endsWith('.wav'));
+  if (!wavs.length) {
+    try { fs.rmSync(tmpSaveDir, { recursive: true, force: true }); } catch {}
+    throw new Error('Supertonic tidak menghasilkan output WAV');
+  }
+  const wav = fs.readFileSync(path.join(tmpSaveDir, wavs[0]));
+  try { fs.rmSync(tmpSaveDir, { recursive: true, force: true }); } catch {}
   return wav;
 }
 
