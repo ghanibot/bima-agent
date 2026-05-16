@@ -736,13 +736,22 @@ async function handleImageQuery(msg, jid, caption, cfg, senderJid, tenantId) {
 async function handleVoiceCommand(msg, jid, text, tenantId) {
   let notified = false;
   try {
-    // Trim to 500 chars so TTS doesn't take too long
-    const ttsText = text.slice(0, 500);
-    await sendMsg(jid, '_Mengkonversi teks ke suara..._', msg);
+    const ttsText = String(text || '').trim();
+    if (!ttsText) { await sendMsg(jid, 'Teks kosong.', msg); return; }
+
+    // Soft cap to keep WA happy: 5000 chars (~5 min audio). Above that, warn.
+    const HARD_CAP = 20000;
+    const SOFT_CAP = 5000;
+    const finalText = ttsText.length > HARD_CAP ? ttsText.slice(0, HARD_CAP) : ttsText;
+
+    const statusMsg = ttsText.length > SOFT_CAP
+      ? `_Mengkonversi ${ttsText.length} karakter ke suara... (bisa makan waktu)_`
+      : '_Mengkonversi teks ke suara..._';
+    await sendMsg(jid, statusMsg, msg);
     notified = true;
 
     const { textToVoiceNote } = require('./tts');
-    const audioBuffer = await textToVoiceNote(ttsText);
+    const audioBuffer = await textToVoiceNote(finalText);
 
     await sock.sendMessage(jid, {
       audio:    audioBuffer,
@@ -750,7 +759,7 @@ async function handleVoiceCommand(msg, jid, text, tenantId) {
       ptt:      true,
     }, { quoted: msg });
 
-    logFn('INFO', `Voice note terkirim (${ttsText.length} chars) -> ${jid}`);
+    logFn('INFO', `Voice note terkirim (${finalText.length} chars, ${(audioBuffer.length/1024).toFixed(1)} KB) -> ${jid}`);
   } catch (e) {
     logFn('ERROR', `TTS /voice error: ${e?.message || String(e)}`);
     if (!notified) await sendMsg(jid, '_Mengkonversi teks ke suara..._', msg).catch(() => {});

@@ -189,6 +189,8 @@ async function synthesizeSupertonic(text) {
   const tmpSaveDir = path.join(os.tmpdir(), `bima_st_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   fs.mkdirSync(tmpSaveDir, { recursive: true });
 
+  // Empirical: ~15s for 100 chars on CPU. Scale + 60s buffer.
+  const synthTimeoutMs = Math.max(60000, Math.min(900000, text.length * 200 + 30000));
   await new Promise((resolve, reject) => {
     execFile('node', [entry,
       '--text', text,
@@ -197,21 +199,38 @@ async function synthesizeSupertonic(text) {
       '--onnx-dir', onnxDir,
       '--save-dir', tmpSaveDir,
       '--n-test', '1',
-    ], { cwd: nodeJsDir, timeout: 120000 }, (err, _stdout, stderr) => {
+    ], { cwd: nodeJsDir, timeout: synthTimeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, _stdout, stderr) => {
       if (err) reject(new Error('Supertonic: ' + (stderr?.slice(-300) || err.message)));
       else resolve();
     });
   });
 
-  // Pick the first .wav file the example wrote
-  const wavs = fs.readdirSync(tmpSaveDir).filter(f => f.toLowerCase().endsWith('.wav'));
+  // Supertonic's automatic chunking for long-form text may emit multiple WAVs.
+  // Pick all .wav files (sorted) and concat — single file fast path, multi via ffmpeg.
+  const wavs = fs.readdirSync(tmpSaveDir).filter(f => f.toLowerCase().endsWith('.wav')).sort();
   if (!wavs.length) {
     try { fs.rmSync(tmpSaveDir, { recursive: true, force: true }); } catch {}
     throw new Error('Supertonic tidak menghasilkan output WAV');
   }
-  const wav = fs.readFileSync(path.join(tmpSaveDir, wavs[0]));
+
+  let wavBuf;
+  if (wavs.length === 1) {
+    wavBuf = fs.readFileSync(path.join(tmpSaveDir, wavs[0]));
+  } else {
+    // Concat via ffmpeg (handles different sample rates safely)
+    const listPath = path.join(tmpSaveDir, 'concat.txt');
+    const concatOut = path.join(tmpSaveDir, 'merged.wav');
+    fs.writeFileSync(listPath, wavs.map(f => `file '${path.join(tmpSaveDir, f).replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n'));
+    const ffmpegPath = _getFfmpegPath();
+    await new Promise((resolve, reject) => {
+      execFile(ffmpegPath, ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', concatOut],
+        (err, _stdout, stderr) => err ? reject(new Error('ffmpeg concat: ' + (stderr?.slice(-200) || err.message))) : resolve());
+    });
+    wavBuf = fs.readFileSync(concatOut);
+  }
+
   try { fs.rmSync(tmpSaveDir, { recursive: true, force: true }); } catch {}
-  return wav;
+  return wavBuf;
 }
 
 // Convert WAV → OGG Opus (voice note format)
