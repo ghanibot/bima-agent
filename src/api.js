@@ -287,6 +287,8 @@ async function handleRequest(req, res) {
       trigger:     wf.trigger,
       nodeCount:   (wf.nodes || []).length,
       entry:       wf.entry,
+      folder:      wf.folder || null,
+      tags:        Array.isArray(wf.tags) ? wf.tags : [],
       updatedAt:   wf.updatedAt,
       stats:       getRunStats(_tenantId(), wf.id),
     }));

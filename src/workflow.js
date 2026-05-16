@@ -152,15 +152,18 @@ async function _runWithRetryTimeout(executor, node, ctx) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     attempts = attempt;
 
-    // Expose timeoutMs to executors that need internal abort (http, shell)
-    const execCtx = { ...ctx, _nodeTimeoutMs: timeoutMs };
+    // AbortController for the executor — fires when wrapper times out.
+    // Executors that respect signals (delay, http.request via signal opt) can
+    // cancel cleanly instead of leaking event-loop timers.
+    const ac = new AbortController();
+    const execCtx = { ...ctx, _nodeTimeoutMs: timeoutMs, _abortSignal: ac.signal };
 
     let timeoutHandle;
     const timeoutPromise = new Promise((_, reject) => {
-      timeoutHandle = setTimeout(
-        () => reject(new Error(`node timeout setelah ${timeoutMs}ms`)),
-        timeoutMs
-      );
+      timeoutHandle = setTimeout(() => {
+        ac.abort();
+        reject(new Error(`node timeout setelah ${timeoutMs}ms`));
+      }, timeoutMs);
     });
 
     try {
@@ -172,6 +175,7 @@ async function _runWithRetryTimeout(executor, node, ctx) {
       }
     } catch (e) {
       clearTimeout(timeoutHandle);
+      ac.abort();
       lastResult = { ok: false, error: e.message };
     }
 
@@ -307,10 +311,18 @@ const NODE_EXECUTORS = {
     return { ok: true, output: result, branch: result ? 'true' : 'false' };
   },
 
-  // delay — wait N seconds
+  // delay — wait N seconds. Cancellable via ctx._abortSignal so the wrapper's
+  // timeout race actually frees the event-loop timer.
   'delay': async (node, ctx) => {
-    const ms = (node.config?.seconds || 1) * 1000;
-    await new Promise(r => setTimeout(r, Math.min(ms, 30000)));
+    const ms = Math.min((node.config?.seconds || 1) * 1000, 30000);
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      const onAbort = () => { clearTimeout(timer); resolve(); };
+      if (ctx._abortSignal) {
+        if (ctx._abortSignal.aborted) onAbort();
+        else ctx._abortSignal.addEventListener('abort', onAbort, { once: true });
+      }
+    });
     return { ok: true, output: null };
   },
 
@@ -322,12 +334,12 @@ const NODE_EXECUTORS = {
     return { ok: true, output: text };
   },
 
-  // set — set a context variable
+  // set — set a context variable. Side-effect applied by outer runner via _ctxSet.
   'set': async (node, ctx) => {
     const key = node.config?.key;
     const val = resolveVars(String(node.config?.value ?? ''), ctx);
-    if (key) ctx[key] = val;
-    return { ok: true, output: val };
+    if (key) ctx[key] = val; // local mutation (best-effort for sync visibility)
+    return { ok: true, output: val, _ctxSet: key ? { [key]: val } : null };
   },
 
   // ── Phase 2 nodes ─────────────────────────────────────────
@@ -827,6 +839,10 @@ async function runChain(wf, entryNodeId, ctx, maxSteps = 100) {
       ctx[`${nodeId}_output`] = result.output;
       ctx.lastOutput = result.output;
     }
+    // Apply side-effect mutations from `set` node so downstream nodes see them
+    if (result._ctxSet && typeof result._ctxSet === 'object') {
+      Object.assign(ctx, result._ctxSet);
+    }
 
     if (node.type === 'condition' && node.branches) {
       nodeId = node.branches[result.branch] || null;
@@ -1070,6 +1086,10 @@ async function runWorkflow(wf, context, logFn) {
     if (result.output !== undefined && result.output !== null) {
       ctx[`${nodeId}_output`] = result.output;
       ctx.lastOutput = result.output;
+    }
+    // Apply side-effect mutations from `set` node so downstream nodes see them
+    if (result._ctxSet && typeof result._ctxSet === 'object') {
+      Object.assign(ctx, result._ctxSet);
     }
 
     // Condition branches
@@ -1324,10 +1344,7 @@ function scheduleWorkflow(tenantId, wf, context, logFn) {
   const key = `${tenantId}::${wf.id}`;
   unscheduleWorkflow(tenantId, wf.id);
 
-  const ms = _parseIntervalMs(wf.trigger?.interval);
-  if (!ms) return false;
-
-  const timer = setInterval(async () => {
+  const run = async () => {
     const fresh = getWorkflow(tenantId, wf.id);
     if (!fresh || !fresh.enabled) { unscheduleWorkflow(tenantId, wf.id); return; }
     try {
@@ -1335,16 +1352,47 @@ function scheduleWorkflow(tenantId, wf, context, logFn) {
     } catch (e) {
       if (logFn) logFn('WF', `Schedule error [${wf.id}]: ${e.message}`);
     }
-  }, ms);
+  };
 
-  _scheduleTimers.set(key, timer);
+  // 1) Cron expression (e.g. "0 9 * * 1-5" for 9 AM weekdays)
+  const cronExpr = wf.trigger?.cron;
+  if (cronExpr) {
+    let cron;
+    try { cron = require('node-cron'); } catch {
+      if (logFn) logFn('WF', `Schedule [${wf.id}]: node-cron belum terinstall — npm install node-cron`);
+      return false;
+    }
+    if (!cron.validate(cronExpr)) {
+      if (logFn) logFn('WF', `Schedule [${wf.id}]: cron expr invalid: "${cronExpr}"`);
+      return false;
+    }
+    const task = cron.schedule(cronExpr, run, { timezone: wf.trigger?.timezone || 'Asia/Jakarta' });
+    _scheduleTimers.set(key, { type: 'cron', task });
+    return true;
+  }
+
+  // 2) Interval shortcut (30s / 5m / 1h / 24h)
+  const ms = _parseIntervalMs(wf.trigger?.interval);
+  if (!ms) return false;
+
+  const timer = setInterval(run, ms);
+  _scheduleTimers.set(key, { type: 'interval', timer });
   return true;
 }
 
 function unscheduleWorkflow(tenantId, wfId) {
   const key = `${tenantId}::${wfId}`;
-  const t = _scheduleTimers.get(key);
-  if (t) { clearInterval(t); _scheduleTimers.delete(key); }
+  const entry = _scheduleTimers.get(key);
+  if (!entry) return;
+  if (entry.type === 'cron' && entry.task) {
+    try { entry.task.stop(); } catch {}
+  } else if (entry.type === 'interval' && entry.timer) {
+    clearInterval(entry.timer);
+  } else if (typeof entry === 'object' && entry.constructor?.name === 'Timeout') {
+    // Legacy entry shape (raw timer object)
+    clearInterval(entry);
+  }
+  _scheduleTimers.delete(key);
 }
 
 // Auto-start all enabled auto-trigger workflows for a tenant (schedule + file + webhook)

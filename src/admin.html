@@ -316,12 +316,18 @@ select[multiple] option{padding:4px 6px}
 <div class="tab" id="tab-wf">
   <div class="card">
     <h2>Workflow</h2>
-    <button class="btn secondary" onclick="loadWorkflows()">&#8635; Refresh</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+      <button class="btn secondary" onclick="loadWorkflows()">&#8635; Refresh</button>
+      <select id="wf-filter-folder" onchange="filterWorkflows()" style="width:auto;min-width:140px;padding:5px 8px">
+        <option value="">📁 Semua folder</option>
+      </select>
+      <input type="text" id="wf-filter-q" placeholder="Cari nama / ID / tag..." oninput="filterWorkflows()" style="flex:1;min-width:160px;padding:5px 8px">
+    </div>
     <div id="wf-loading" class="loading" style="margin-top:8px">Memuat...</div>
     <table id="wf-table" style="margin-top:12px;display:none">
       <thead>
         <tr>
-          <th>ID</th><th>Nama</th><th>Trigger</th><th>Nodes</th>
+          <th>ID</th><th>Nama</th><th>Folder</th><th>Tags</th><th>Trigger</th><th>Nodes</th>
           <th>Runs</th><th>OK%</th><th>Status</th><th>Aksi</th>
         </tr>
       </thead>
@@ -775,6 +781,8 @@ function esc(s) {
 }
 
 // ── Workflow tab ───────────────────────────────────────────────
+var _ALL_WORKFLOWS = [];
+
 async function loadWorkflows() {
   document.getElementById('wf-loading').style.display = 'block';
   document.getElementById('wf-table').style.display   = 'none';
@@ -783,40 +791,81 @@ async function loadWorkflows() {
     var d = await r.json();
     document.getElementById('wf-loading').style.display = 'none';
     if (!r.ok) { document.getElementById('wf-loading').textContent = 'Error: ' + d.error; return; }
-
-    var tbody = document.getElementById('wf-body');
-    tbody.innerHTML = '';
-    if (!d.workflows.length) {
-      tbody.innerHTML = '<tr><td colspan="8" style="color:#64748b">Belum ada workflow. Buat via CLI: /workflow create</td></tr>';
-    } else {
-      d.workflows.forEach(function(wf) {
-        var trg = wf.trigger ? (wf.trigger.type + (wf.trigger.interval ? '/' + wf.trigger.interval : '') + (wf.trigger.match ? '/' + esc(wf.trigger.match) : '')) : '-';
-        var stats = wf.stats;
-        var enabledClass = wf.enabled ? 'green' : '';
-        var statusLabel  = wf.enabled ? '● aktif' : '○ off';
-        tbody.innerHTML += '<tr>' +
-          '<td><code>' + esc(wf.id) + '</code></td>' +
-          '<td>' + esc(wf.name) + '</td>' +
-          '<td style="font-size:.75rem;color:#94a3b8">' + trg + '</td>' +
-          '<td style="text-align:center">' + wf.nodeCount + '</td>' +
-          '<td style="text-align:center">' + (stats ? stats.total : '-') + '</td>' +
-          '<td style="text-align:center">' + (stats ? stats.successRate + '%' : '-') + '</td>' +
-          '<td class="value ' + enabledClass + '" style="font-size:.8rem">' + statusLabel + '</td>' +
-          '<td>' +
-            '<button class="btn secondary" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="triggerRun(\'' + esc(wf.id) + '\')">&#9654; Run</button>' +
-            '<button class="btn secondary" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="showRuns(\'' + esc(wf.id) + '\')">&#128203; History</button>' +
-            (wf.enabled
-              ? '<button class="btn danger" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="toggleWf(\'' + esc(wf.id) + '\',false)">Stop</button>'
-              : '<button class="btn" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="toggleWf(\'' + esc(wf.id) + '\',true)">Start</button>'
-            ) +
-          '</td>' +
-        '</tr>';
-      });
-    }
-    document.getElementById('wf-table').style.display = 'table';
+    _ALL_WORKFLOWS = d.workflows || [];
+    populateFolderFilter();
+    filterWorkflows();
   } catch(e) {
     document.getElementById('wf-loading').textContent = 'Gagal memuat: ' + e.message;
   }
+}
+
+function populateFolderFilter() {
+  var sel = document.getElementById('wf-filter-folder');
+  if (!sel) return;
+  var folders = {};
+  _ALL_WORKFLOWS.forEach(function(wf) { if (wf.folder) folders[wf.folder] = true; });
+  var current = sel.value;
+  sel.innerHTML = '<option value="">📁 Semua folder</option>';
+  Object.keys(folders).sort().forEach(function(f) {
+    sel.innerHTML += '<option value="' + esc(f) + '">📁 ' + esc(f) + '</option>';
+  });
+  if (current && folders[current]) sel.value = current;
+}
+
+function filterWorkflows() {
+  var folderSel = document.getElementById('wf-filter-folder');
+  var qInput    = document.getElementById('wf-filter-q');
+  var folder    = folderSel ? folderSel.value : '';
+  var q         = qInput ? qInput.value.trim().toLowerCase() : '';
+
+  var filtered = _ALL_WORKFLOWS.filter(function(wf) {
+    if (folder && (wf.folder || '') !== folder) return false;
+    if (q) {
+      var hay = (wf.id + ' ' + wf.name + ' ' + (wf.folder || '') + ' ' + (wf.tags || []).join(' ')).toLowerCase();
+      if (hay.indexOf(q) === -1) return false;
+    }
+    return true;
+  });
+  renderWorkflowRows(filtered);
+}
+
+function renderWorkflowRows(workflows) {
+  var tbody = document.getElementById('wf-body');
+  tbody.innerHTML = '';
+  if (!workflows.length) {
+    tbody.innerHTML = '<tr><td colspan="10" style="color:#64748b">Tidak ada workflow yang cocok dengan filter.</td></tr>';
+  } else {
+    workflows.forEach(function(wf) {
+      var trg = wf.trigger ? (wf.trigger.type + (wf.trigger.interval ? '/' + wf.trigger.interval : '') + (wf.trigger.cron ? '/' + esc(wf.trigger.cron) : '') + (wf.trigger.match ? '/' + esc(wf.trigger.match) : '')) : '-';
+      var stats = wf.stats;
+      var enabledClass = wf.enabled ? 'green' : '';
+      var statusLabel  = wf.enabled ? '● aktif' : '○ off';
+      var folderCell = wf.folder ? '<span class="badge">📁 ' + esc(wf.folder) + '</span>' : '<span style="color:#475569">—</span>';
+      var tagsCell   = (wf.tags && wf.tags.length)
+        ? wf.tags.map(function(t){ return '<span class="badge" style="margin-right:2px">' + esc(t) + '</span>'; }).join('')
+        : '<span style="color:#475569">—</span>';
+      tbody.innerHTML += '<tr>' +
+        '<td><code>' + esc(wf.id) + '</code></td>' +
+        '<td>' + esc(wf.name) + '</td>' +
+        '<td>' + folderCell + '</td>' +
+        '<td>' + tagsCell + '</td>' +
+        '<td style="font-size:.75rem;color:#94a3b8">' + trg + '</td>' +
+        '<td style="text-align:center">' + wf.nodeCount + '</td>' +
+        '<td style="text-align:center">' + (stats ? stats.total : '-') + '</td>' +
+        '<td style="text-align:center">' + (stats ? stats.successRate + '%' : '-') + '</td>' +
+        '<td class="value ' + enabledClass + '" style="font-size:.8rem">' + statusLabel + '</td>' +
+        '<td>' +
+          '<button class="btn secondary" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="triggerRun(\'' + esc(wf.id) + '\')">&#9654; Run</button>' +
+          '<button class="btn secondary" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="showRuns(\'' + esc(wf.id) + '\')">&#128203; History</button>' +
+          (wf.enabled
+            ? '<button class="btn danger" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="toggleWf(\'' + esc(wf.id) + '\',false)">Stop</button>'
+            : '<button class="btn" style="padding:3px 8px;font-size:.75rem;margin:1px" onclick="toggleWf(\'' + esc(wf.id) + '\',true)">Start</button>'
+          ) +
+        '</td>' +
+      '</tr>';
+    });
+  }
+  document.getElementById('wf-table').style.display = 'table';
 }
 
 async function triggerRun(id) {

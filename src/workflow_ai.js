@@ -19,7 +19,9 @@ SCHEMA WORKFLOW
     "exclusive": boolean  — true = hentikan AI normal jika trigger cocok (wa.message)
     "onMedia":   "audio"|"image"|"video"|"document"|"any"  — fire only on media of this type (wa.message)
     "mediaOnly": boolean  — true = abaikan pesan teks, fire hanya jika ada media (wa.message)
-    "interval":  string   — "30s"|"5m"|"1h"|"6h"|"24h" (schedule)
+    "interval":  string   — "30s"|"5m"|"1h"|"6h"|"24h" (schedule, simple interval)
+    "cron":      string   — cron expression "0 9 * * 1-5" (schedule, advanced)
+    "timezone":  string   — default "Asia/Jakarta" (cron only)
     "path":      string   — path folder/file (file)
     "events":    array    — ["created","modified"] (file)
     "webhookId": string   — ID unik webhook URL (webhook)
@@ -29,6 +31,8 @@ SCHEMA WORKFLOW
   }
   "nodes": [ ...Node ]
   "entry": string  — id node pertama
+  "folder": string?  — opsional, untuk grouping di Admin Workflow tab
+  "tags":   string[]? — opsional, label cepat (mis. ["penting","crypto"])
 }
 
 ═══════════════════════════════════════════════

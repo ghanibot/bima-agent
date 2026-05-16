@@ -453,30 +453,79 @@ async function cmdWorkflow(args) {
   const sub = args[0];
 
   // ── list ──────────────────────────────────────────────────
+  // /workflow list                 — all
+  // /workflow list <folder>        — filter by folder
+  // /workflow list --tag <tag>     — filter by tag
   if (!sub || sub === 'list') {
-    const workflows = listWorkflows(_currentTenant);
-    let out = `WORKFLOW — ${workflows.length} workflow\n` + '─'.repeat(50) + '\n';
+    let workflows = listWorkflows(_currentTenant);
+    const arg = args[1];
+    const tagFilter = args.indexOf('--tag') !== -1 ? args[args.indexOf('--tag') + 1] : null;
+    if (arg && arg !== '--tag') {
+      workflows = workflows.filter(wf => (wf.folder || '').toLowerCase() === arg.toLowerCase());
+    }
+    if (tagFilter) {
+      workflows = workflows.filter(wf => Array.isArray(wf.tags) && wf.tags.includes(tagFilter));
+    }
+
+    let out = `WORKFLOW — ${workflows.length}${arg ? ` di folder "${arg}"` : ''}${tagFilter ? ` tag "${tagFilter}"` : ''}\n` + '─'.repeat(50) + '\n';
     if (!workflows.length) {
-      out += 'Belum ada workflow.\nBuat: /workflow create';
+      out += arg || tagFilter ? 'Tidak ada workflow yang cocok filter.' : 'Belum ada workflow.\nBuat: /workflow create';
     } else {
       workflows.forEach((wf, i) => {
         const st  = wf.enabled ? '● aktif' : '○ nonaktif';
         const trigMap = {
-          schedule:        `⏱ ${wf.trigger?.interval}`,
+          schedule:        wf.trigger?.cron ? `⏱ cron ${wf.trigger.cron}` : `⏱ ${wf.trigger?.interval}`,
           'wa.message':    `💬 "${wf.trigger?.match || '*'}"`,
+          'tg.message':    `✈ "${wf.trigger?.match || '*'}"`,
           file:            `📁 ${wf.trigger?.path || '?'}`,
           webhook:         `🔗 /webhook/${wf.trigger?.webhookId || wf.id}`,
           'wa.group_event':`👥 ${(wf.trigger?.actions || ['add','remove']).join('/')}`,
         };
         const trg = trigMap[wf.trigger?.type] || '⚡ manual';
-        out += `  ${i + 1}. [${st}] ${wf.id}\n`;
+        const folderLabel = wf.folder ? ` 📁 ${wf.folder}` : '';
+        const tagsLabel   = (Array.isArray(wf.tags) && wf.tags.length) ? ` [${wf.tags.join(', ')}]` : '';
+        out += `  ${i + 1}. [${st}] ${wf.id}${folderLabel}${tagsLabel}\n`;
         out += `     ${wf.name}\n`;
         out += `     Trigger: ${trg} | Node: ${(wf.nodes || []).length}\n`;
       });
       out += '─'.repeat(50);
-      out += '\nVisual: /workflow view <id> | Run: /workflow run <id> | Enable: /workflow enable <id>';
+      out += '\nFilter: /workflow list <folder> | /workflow list --tag <tag>';
+      out += '\nVisual: /workflow view <id> | Run: /workflow run <id>';
     }
     println(out);
+    return;
+  }
+
+  // ── folder / tag setters ──────────────────────────────────
+  // /workflow folder <id> <name|none>     — set or clear folder
+  // /workflow tag <id> add <tag>          — add tag
+  // /workflow tag <id> remove <tag>       — remove tag
+  if (sub === 'folder') {
+    const id = args[1], name = args[2];
+    if (!id || !name) { println('Contoh: /workflow folder my_wf "Otomasi Harian"   |   /workflow folder my_wf none'); return; }
+    const wf = getWorkflow(_currentTenant, id);
+    if (!wf) { println(`✗ Workflow "${id}" tidak ada.`); return; }
+    if (name === 'none' || name === '-') delete wf.folder;
+    else wf.folder = name.trim();
+    saveWorkflow(_currentTenant, wf);
+    println(`✓ Folder "${id}": ${wf.folder || '(dihapus)'}`);
+    return;
+  }
+  if (sub === 'tag') {
+    const id = args[1], action = args[2], tag = args[3];
+    if (!id || !action || !tag) { println('Contoh: /workflow tag my_wf add penting   |   /workflow tag my_wf remove penting'); return; }
+    const wf = getWorkflow(_currentTenant, id);
+    if (!wf) { println(`✗ Workflow "${id}" tidak ada.`); return; }
+    wf.tags = Array.isArray(wf.tags) ? wf.tags : [];
+    if (action === 'add') {
+      if (!wf.tags.includes(tag)) wf.tags.push(tag);
+    } else if (action === 'remove' || action === 'rm') {
+      wf.tags = wf.tags.filter(t => t !== tag);
+    } else {
+      println('Action: add | remove'); return;
+    }
+    saveWorkflow(_currentTenant, wf);
+    println(`✓ Tags "${id}": [${wf.tags.join(', ') || '(kosong)'}]`);
     return;
   }
 
