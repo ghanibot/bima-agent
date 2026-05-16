@@ -2070,7 +2070,7 @@ async function cmdApi(args) {
     if (st.running) { println(`API sudah berjalan di port ${st.port}`); return; }
     const port   = parseInt(args[1], 10) || 3000;
     const cfg    = getConfig(_currentTenant);
-    const apiKey = cfg.apiKey || null;
+    const apiKey = cfg.adminApiKey || null; // cfg.apiKey is the AI provider key, not admin auth
     try {
       await startApi({
         port,

@@ -139,12 +139,14 @@ async function main() {
     const { startApi } = require('./api');
     const apiPort = cfg.apiPort || 3000;
 
-    const { getStatus: getWAStatus, sendMessage: sendWAMessage } = require('./whatsapp');
+    const { getWAStatus, sendWAMessage } = require('./whatsapp');
     const tgMod = (() => { try { return require('./telegram'); } catch { return null; } })();
 
     await startApi({
       port:    apiPort,
-      apiKey:  cfg.apiKey || null,
+      // cfg.apiKey is the AI provider key (OpenRouter/OpenAI/etc).
+      // Admin panel auth uses a separate adminApiKey. If unset, panel is open.
+      apiKey:  cfg.adminApiKey || null,
       getStatus: () => {
         const ws  = getWAStatus();
         const tgSt = tgMod ? tgMod.getTelegramStatus() : {};
